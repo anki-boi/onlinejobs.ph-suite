@@ -16,9 +16,11 @@ Open http://localhost:8000
 
 1. **Enter Search Keyword** — search jobs by keyword (e.g., "medical", "bookkeeping", "designer")
 2. **Set Posted Since** (optional) — only scrape jobs posted after a specific date
-3. **Add Keywords** — positive (keep) and negative (hide) filters applied post-scrape
-4. **Run Pipeline** — harvests links, then fetches full details for each job
+3. **Run Pipeline** — harvests links page-by-page, then fetches full details for each job
+4. **Add Keywords** — positive (keep) and negative (hide) filters applied post-scrape
 5. **Apply Keyword Filters** — hide jobs that don't match your positive keywords or match negative keywords
+
+**Tip:** Click the **Stop** button during pipeline execution to halt scraping early. This is useful when you hit rate limits (HTTP 429) or want to stop after collecting enough jobs.
 
 ## Notes
 

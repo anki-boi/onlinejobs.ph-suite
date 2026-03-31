@@ -26,7 +26,7 @@ ALT_BASE_URL  = "https://www.onlinejobs.ph"
 SEARCH_BASE   = f"{BASE_URL}/jobseekers/jobsearch"
 ALT_SEARCH_BASE = f"{ALT_BASE_URL}/jobseekers/jobsearch"
 JOBS_PER_PAGE = 30
-REQUEST_DELAY = 0.5
+REQUEST_DELAY = 0.5  # Delay between requests to avoid rate limiting
 
 CLOSED_STATUS = "Closed"
 OPEN_STATUS   = "Open"
@@ -48,6 +48,19 @@ HEADERS = {
 
 # Updated dynamically when we discover which domain resolves in the current environment.
 ACTIVE_BASE_URL = BASE_URL
+
+# Global flag to signal scraping should stop
+STOP_SCRAPING = False
+
+def stop_scraping():
+    """Signal all scraping operations to stop."""
+    global STOP_SCRAPING
+    STOP_SCRAPING = True
+
+def reset_stop_flag():
+    """Reset the stop flag before starting new scrape."""
+    global STOP_SCRAPING
+    STOP_SCRAPING = False
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -91,6 +104,9 @@ def fetch_page(url: str) -> BeautifulSoup:
     for candidate in candidates:
         try:
             resp = requests.get(candidate, headers=HEADERS, timeout=20)
+            # Check for rate limit
+            if resp.status_code == 429:
+                raise requests.RequestException(f"HTTP 429 Rate Limit", response=resp)
             resp.raise_for_status()
             parsed = urlparse(resp.url)
             ACTIVE_BASE_URL = f"{parsed.scheme}://{parsed.netloc}".removesuffix("/")
@@ -222,13 +238,22 @@ def harvest_links(
 
     page = 1
     while True:
+        # Check stop flag at start of each page
+        if STOP_SCRAPING:
+            yield "LOG: ⛔ Scraping stopped by user."
+            break
+            
         url = search_url(keyword, page)
         yield f"LOG:   Page {page} → {url}"
 
         try:
             soup = fetch_page(url)
         except requests.RequestException as exc:
-            yield f"LOG:   ⚠  Could not fetch: {exc}"
+            # Check if it's a 429 error
+            if hasattr(exc, 'response') and exc.response is not None and exc.response.status_code == 429:
+                yield "LOG:   ⛔ Rate limit (HTTP 429) detected — stopping."
+            else:
+                yield f"LOG:   ⚠  Could not fetch: {exc}"
             break
 
         boxes = soup.select(".jobpost-cat-box.latest-job-post")
@@ -382,6 +407,10 @@ def _scrape_job_page(url: str) -> dict:
     }
     try:
         resp = requests.get(url, headers=HEADERS, timeout=15)
+        # Check for rate limit
+        if resp.status_code == 429:
+            result["reason"] = "HTTP 429 Rate Limit"
+            return result
         if resp.status_code == 404:
             result["reason"] = "404 Not Found"
             return result

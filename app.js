@@ -26,6 +26,7 @@ const els = {
   negChips:       $('negChips'),
   btnApplyKeywords: $('btnApplyKeywords'),
   btnRun:         $('btnRun'),
+  btnStop:        $('btnStop'),
   btnCheckOnly:   $('btnCheckOnly'),
   consoleWrap:    $('consoleWrap'),
   btnCloseConsole: $('btnCloseConsole'),
@@ -218,9 +219,13 @@ els.btnApplyKeywords.addEventListener('click', async () => {
 
 // ── Pipeline ───────────────────────────────────────────────────────────────
 
+let pipelineRunning = false;
+
 function setRunning(running) {
+  pipelineRunning = running;
   els.btnRun.disabled        = running;
   els.btnCheckOnly.disabled  = running;
+  els.btnStop.style.display  = running ? 'block' : 'none';
   if (running) {
     els.btnRun.classList.add('running');
   } else {
@@ -229,6 +234,16 @@ function setRunning(running) {
     loadJobs();
   }
 }
+
+els.btnStop.addEventListener('click', async () => {
+  try {
+    await api('POST', '/api/pipeline/stop', {});
+    logLine('⛔ Stop signal sent. Waiting for current operation to finish…');
+    toast('Stopping pipeline…', 'info');
+  } catch (e) {
+    toast(`Error stopping: ${e.message}`, 'error');
+  }
+});
 
 els.btnRun.addEventListener('click', () => {
   const keyword = (els.searchKeyword.value || '').trim();
