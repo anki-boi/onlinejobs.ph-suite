@@ -300,3 +300,12 @@ async def refresh_tags():
         yield sse_event("done", event="complete")
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# ── Stop pipeline endpoint ────────────────────────────────────────────────────
+
+@app.post("/api/pipeline/stop")
+def stop_pipeline():
+    """Signal all running scraping operations to stop."""
+    scraper.stop_scraping()
+    return {"ok": True, "message": "Stop signal sent"}

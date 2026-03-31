@@ -379,6 +379,17 @@ header {
 
 .btn-ghost:hover:not(:disabled) { color: var(--text2); background: var(--bg3); border-color: var(--border); }
 
+.btn-danger {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: #c54a4a;
+  border-color: #c54a4a;
+}
+
 .btn-sm { width: auto; padding: 5px 10px; font-size: 0.75rem; }
 
 .checkbox-label {
