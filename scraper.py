@@ -312,21 +312,56 @@ def harvest_links(
 
 
 def _extract_posted_date(box) -> date | None:
+    # Current search result cards expose timestamps via `data-temp`
+    # and visible text like: "Posted on 2026-03-31 16:54:20".
+    posted_el = box.select_one("p[data-temp], p[data-temp-2], em")
+    if posted_el:
+        for candidate in (
+            posted_el.get("data-temp"),
+            posted_el.get("data-temp-2"),
+            clean(posted_el.get_text(" ", strip=True)),
+        ):
+            parsed = _parse_posted_date_string(candidate)
+            if parsed:
+                return parsed
+
     text = clean(box.get_text(" ", strip=True))
     m = re.search(r"posted on\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})", text, flags=re.I)
     if m:
-        try:
-            return datetime.strptime(m.group(1), "%B %d, %Y").date()
-        except ValueError:
-            pass
+        parsed = _parse_posted_date_string(m.group(1))
+        if parsed:
+            return parsed
     m = re.search(r"posted on\s+(\d{1,2}/\d{1,2}/\d{2,4})", text, flags=re.I)
     if m:
-        raw = m.group(1)
-        for fmt in ("%m/%d/%Y", "%m/%d/%y"):
-            try:
-                return datetime.strptime(raw, fmt).date()
-            except ValueError:
-                continue
+        parsed = _parse_posted_date_string(m.group(1))
+        if parsed:
+            return parsed
+    m = re.search(r"posted on\s+(\d{4}-\d{2}-\d{2}(?:\s+\d{2}:\d{2}:\d{2})?)", text, flags=re.I)
+    if m:
+        parsed = _parse_posted_date_string(m.group(1))
+        if parsed:
+            return parsed
+    return None
+
+
+def _parse_posted_date_string(raw: str | None) -> date | None:
+    if not raw:
+        return None
+
+    raw = clean(raw)
+    raw = re.sub(r"^posted on\s+", "", raw, flags=re.I).strip()
+
+    for fmt in (
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d",
+        "%B %d, %Y",
+        "%m/%d/%Y",
+        "%m/%d/%y",
+    ):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
     return None
 
 # ── Job detail checking ───────────────────────────────────────────────────────
