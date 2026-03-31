@@ -12,16 +12,19 @@ Functions:
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
-from urllib.parse import urlparse, urlunparse
+from datetime import date, datetime
+from html import unescape
+from urllib.parse import quote_plus, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-BASE_URL      = "https://www.onlinejobs.ph"
+BASE_URL      = "https://onlinejobs.ph"
+ALT_BASE_URL  = "https://www.onlinejobs.ph"
 SEARCH_BASE   = f"{BASE_URL}/jobseekers/jobsearch"
+ALT_SEARCH_BASE = f"{ALT_BASE_URL}/jobseekers/jobsearch"
 JOBS_PER_PAGE = 30
 REQUEST_DELAY = 0.5
 
@@ -43,6 +46,9 @@ HEADERS = {
     )
 }
 
+# Updated dynamically when we discover which domain resolves in the current environment.
+ACTIVE_BASE_URL = BASE_URL
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def clean(text: str) -> str:
@@ -59,21 +65,40 @@ def canonical_url(raw: str) -> str:
         raw = BASE_URL + "/" + raw
     try:
         p = urlparse(raw.lower())
-        return urlunparse((p.scheme, p.netloc, p.path.rstrip("/"), "", "", ""))
+        netloc = p.netloc.removeprefix("www.")
+        return urlunparse((p.scheme, netloc, p.path.rstrip("/"), "", "", ""))
     except Exception:
         return raw.lower().rstrip("/")
 
 
-def tag_url(skill_tag: str, page: int) -> str:
+def search_url(keyword: str, page: int) -> str:
     offset = (page - 1) * JOBS_PER_PAGE
-    path   = SEARCH_BASE if offset == 0 else f"{SEARCH_BASE}/{offset}"
-    return f"{path}?jobkeyword=&skill_tags={skill_tag}&fullTime=on&isFromJobsearchForm=1"
+    search_base = f"{ACTIVE_BASE_URL}/jobseekers/jobsearch"
+    path = search_base if offset == 0 else f"{search_base}/{offset}"
+    kw = quote_plus((keyword or "").strip())
+    return f"{path}?jobkeyword={kw}&skill_tags=&gig=on&partTime=on&fullTime=on&isFromJobsearchForm=1"
 
 
 def fetch_page(url: str) -> BeautifulSoup:
-    resp = requests.get(url, headers=HEADERS, timeout=20)
-    resp.raise_for_status()
-    return BeautifulSoup(resp.text, "html.parser")
+    global ACTIVE_BASE_URL
+    candidates = [url]
+    if url.startswith(BASE_URL):
+        candidates.append(url.replace(BASE_URL, ALT_BASE_URL, 1))
+    elif url.startswith(ALT_BASE_URL):
+        candidates.append(url.replace(ALT_BASE_URL, BASE_URL, 1))
+
+    last_exc = None
+    for candidate in candidates:
+        try:
+            resp = requests.get(candidate, headers=HEADERS, timeout=20)
+            resp.raise_for_status()
+            parsed = urlparse(resp.url)
+            ACTIVE_BASE_URL = f"{parsed.scheme}://{parsed.netloc}".removesuffix("/")
+            return BeautifulSoup(resp.text, "html.parser")
+        except requests.RequestException as exc:
+            last_exc = exc
+
+    raise last_exc
 
 # ── Tag scraping ──────────────────────────────────────────────────────────────
 
@@ -83,21 +108,52 @@ def scrape_tags() -> tuple[list[dict], list[str]]:
     Returns (tags, log_lines) where tags is a list of {"id", "name"} dicts.
     """
     logs = []
+    global ACTIVE_BASE_URL
     logs.append(f"🌐 Fetching tag catalogue from {SEARCH_BASE} …")
 
-    try:
-        resp = requests.get(SEARCH_BASE, headers=HEADERS, timeout=20)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        logs.append(f"❌ Failed to fetch page: {e}")
+    resp = None
+    last_exc = None
+    for candidate in (SEARCH_BASE, ALT_SEARCH_BASE):
+        try:
+            resp = requests.get(candidate, headers=HEADERS, timeout=20)
+            resp.raise_for_status()
+            parsed = urlparse(resp.url)
+            ACTIVE_BASE_URL = f"{parsed.scheme}://{parsed.netloc}".removesuffix("/")
+            if candidate != SEARCH_BASE:
+                logs.append(f"ℹ️ Primary domain failed; using fallback domain: {candidate}")
+            break
+        except requests.RequestException as e:
+            last_exc = e
+            logs.append(f"⚠️ Failed to fetch {candidate}: {e}")
+
+    if resp is None:
+        logs.append(f"❌ Failed to fetch page from all known domains: {last_exc}")
         return [], logs
 
-    soup      = BeautifulSoup(resp.text, "html.parser")
+    seen: set[str] = set()
+    tags: list[dict] = []
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    def add_tag(value: str, raw_name: str):
+        tag_id = (value or "").strip()
+        if not tag_id or not re.match(r"^\d+$", tag_id) or tag_id in seen:
+            return
+
+        # data-name is often HTML-encoded, e.g.
+        # "&lt;small&gt;Category &lt;span&gt;»&lt;/span&gt; &lt;/small&gt; Skill"
+        decoded = unescape(raw_name or "")
+        name = clean(BeautifulSoup(decoded, "html.parser").get_text(" ", strip=True))
+        if not name:
+            return
+
+        seen.add(tag_id)
+        tags.append({"id": tag_id, "name": name})
+
+    # Strategy 1 (legacy): <select name="skill_tags"><option value="123">…</option></select>
     select_el = (
         soup.find("select", {"name": re.compile(r"skill_tags", re.I)})
         or soup.find("select", {"id": re.compile(r"skill_tags", re.I)})
     )
-
     if not select_el:
         for sel in soup.find_all("select"):
             options = sel.find_all("option")
@@ -105,21 +161,28 @@ def scrape_tags() -> tuple[list[dict], list[str]]:
             if len(numeric) > 20:
                 select_el = sel
                 break
+    if select_el:
+        for option in select_el.find_all("option"):
+            add_tag(option.get("value", ""), option.get_text())
+        logs.append(f"ℹ️ Parsed {len(tags)} tag(s) from <select> options.")
 
-    if not select_el:
-        logs.append("❌ Could not locate the skill_tags <select> element. Site layout may have changed.")
+    # Strategy 2 (current UI): dropdown links with data-id/data-name
+    if not tags:
+        for el in soup.select(".dropdown-skill-item[data-id][data-name], a[data-type='add'][data-id][data-name]"):
+            add_tag(el.get("data-id", ""), el.get("data-name", "") or el.get_text())
+        if tags:
+            logs.append(f"ℹ️ Parsed {len(tags)} tag(s) from dropdown data-* attributes.")
+
+    # Strategy 3 (fallback): broad scan for numeric data-id + data-name
+    if not tags:
+        for el in soup.select("[data-id][data-name]"):
+            add_tag(el.get("data-id", ""), el.get("data-name", ""))
+        if tags:
+            logs.append(f"ℹ️ Parsed {len(tags)} tag(s) from generic data-* attributes.")
+
+    if not tags:
+        logs.append("❌ Could not locate skill tags in page HTML (select/options or dropdown data-*). Site layout may have changed.")
         return [], logs
-
-    seen: set[str] = set()
-    tags: list[dict] = []
-    for option in select_el.find_all("option"):
-        value = (option.get("value") or "").strip()
-        name  = clean(option.get_text())
-        if not value or not re.match(r"^\d+$", value) or not name:
-            continue
-        if value not in seen:
-            seen.add(value)
-            tags.append({"id": value, "name": name})
 
     tags.sort(key=lambda t: t["name"].lower())
     logs.append(f"✅ Found {len(tags)} skill tag(s).")
@@ -128,10 +191,10 @@ def scrape_tags() -> tuple[list[dict], list[str]]:
 # ── Link harvesting ───────────────────────────────────────────────────────────
 
 def harvest_links(
-    tags: dict[str, str],         # {label: skill_tag_id}
+    keyword: str,
     existing_links: set[str],
     hidden_links: set[str],
-    max_pages: int = 1,
+    posted_since: date | None = None,
 ):
     """
     Generator. Yields log-line strings.
@@ -147,58 +210,99 @@ def harvest_links(
     collected: dict[str, dict] = {}
     today = date.today().isoformat()
 
-    for tag_label, skill_tag in tags.items():
-        yield f"LOG: 🏷  Searching tag: {tag_label}"
+    keyword = (keyword or "").strip()
+    if not keyword:
+        yield "LOG: ⚠ Empty keyword; nothing to search."
+        yield "RESULT:[]"
+        return
 
-        for page in range(1, max_pages + 1):
-            url = tag_url(skill_tag, page)
-            yield f"LOG:   Page {page} → {url}"
+    yield f"LOG: 🔎 Searching keyword: {keyword}"
+    if posted_since:
+        yield f"LOG: 📅 Scraping until posts older than: {posted_since.isoformat()}"
 
-            try:
-                soup = fetch_page(url)
-            except requests.RequestException as exc:
-                yield f"LOG:   ⚠  Could not fetch: {exc}"
-                break
+    page = 1
+    while True:
+        url = search_url(keyword, page)
+        yield f"LOG:   Page {page} → {url}"
 
-            boxes = soup.select(".jobpost-cat-box.latest-job-post")
-            if not boxes:
-                yield f"LOG:   No job boxes found — stopping tag."
-                break
+        try:
+            soup = fetch_page(url)
+        except requests.RequestException as exc:
+            yield f"LOG:   ⚠  Could not fetch: {exc}"
+            break
 
-            found = skipped_existing = skipped_hidden = 0
-            for box in boxes:
-                link_tag = box.select_one("a[href^='/jobseekers/job/']")
-                if not link_tag:
-                    continue
-                link = canonical_url(link_tag.get("href", ""))
-                if not link:
-                    continue
-                if link in hidden_links:
-                    skipped_hidden += 1
-                    continue
-                if link in existing_links:
-                    skipped_existing += 1
-                    continue
-                collected[link] = {
-                    "job_link":   link,
-                    "search_tag": tag_label,
-                    "date_found": today,
-                }
-                found += 1
+        boxes = soup.select(".jobpost-cat-box.latest-job-post")
+        if not boxes:
+            yield "LOG:   No job boxes found — stopping search."
+            break
 
-            parts = [f"{found} new"]
-            if skipped_existing:
-                parts.append(f"{skipped_existing} already in DB")
-            if skipped_hidden:
-                parts.append(f"{skipped_hidden} hidden/suppressed")
-            yield f"LOG:   → {', '.join(parts)}"
+        found = skipped_existing = skipped_hidden = skipped_old = 0
+        parsed_dates: list[date] = []
+        for box in boxes:
+            posted = _extract_posted_date(box)
+            if posted:
+                parsed_dates.append(posted)
+            if posted_since and posted and posted < posted_since:
+                skipped_old += 1
+                continue
 
-            if found == 0:
-                break
+            link_tag = box.select_one("a[href^='/jobseekers/job/']")
+            if not link_tag:
+                continue
+            link = canonical_url(link_tag.get("href", ""))
+            if not link:
+                continue
+            if link in hidden_links:
+                skipped_hidden += 1
+                continue
+            if link in existing_links:
+                skipped_existing += 1
+                continue
+            collected[link] = {
+                "job_link":   link,
+                "search_tag": keyword,
+                "date_found": today,
+            }
+            found += 1
+
+        parts = [f"{found} new"]
+        if skipped_existing:
+            parts.append(f"{skipped_existing} already in DB")
+        if skipped_hidden:
+            parts.append(f"{skipped_hidden} hidden/suppressed")
+        if skipped_old:
+            parts.append(f"{skipped_old} older than cutoff")
+        yield f"LOG:   → {', '.join(parts)}"
+
+        if posted_since and parsed_dates and min(parsed_dates) < posted_since:
+            yield "LOG:   Reached jobs older than cutoff date — stopping search."
+            break
+
+        page += 1
+        time.sleep(REQUEST_DELAY)
 
     new_stubs = list(collected.values())
     yield f"LOG: ✅ Harvest complete — {len(new_stubs)} new link(s) to check."
     yield f"RESULT:{json.dumps(new_stubs)}"
+
+
+def _extract_posted_date(box) -> date | None:
+    text = clean(box.get_text(" ", strip=True))
+    m = re.search(r"posted on\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})", text, flags=re.I)
+    if m:
+        try:
+            return datetime.strptime(m.group(1), "%B %d, %Y").date()
+        except ValueError:
+            pass
+    m = re.search(r"posted on\s+(\d{1,2}/\d{1,2}/\d{2,4})", text, flags=re.I)
+    if m:
+        raw = m.group(1)
+        for fmt in ("%m/%d/%Y", "%m/%d/%y"):
+            try:
+                return datetime.strptime(raw, fmt).date()
+            except ValueError:
+                continue
+    return None
 
 # ── Job detail checking ───────────────────────────────────────────────────────
 

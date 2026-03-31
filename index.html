@@ -27,46 +27,30 @@
   <!-- ── Sidebar ────────────────────────────────────────────────────────── -->
   <aside class="sidebar">
 
-    <!-- Step 1: Tag catalogue -->
+    <!-- Step 1: Search keyword -->
     <section class="panel">
       <div class="panel-header">
         <span class="step-badge">01</span>
-        <h2>Tag Catalogue</h2>
+        <h2>Keyword Search</h2>
       </div>
-      <p class="panel-hint">Sync available skill tags from OnlineJobs.ph before searching.</p>
-      <button class="btn btn-outline" id="btnRefreshTags">↻ Refresh Tags</button>
-      <div class="tag-count" id="tagCount">— tags loaded</div>
+      <p class="panel-hint">Scrape jobs by keyword (default: medical).</p>
+      <input type="text" id="searchKeyword" class="input" value="medical" placeholder="medical, bookkeeping, designer…">
     </section>
 
-    <!-- Step 2: Search config -->
-    <section class="panel">
-      <div class="panel-header">
-        <span class="step-badge">02</span>
-        <h2>Search Tags</h2>
-      </div>
-      <p class="panel-hint">Select tags to search. Hold Ctrl/⌘ to pick multiple.</p>
-      <div class="tag-search-wrap">
-        <input type="text" id="tagSearchInput" class="input" placeholder="Filter tags…">
-      </div>
-      <div class="tag-select-wrap">
-        <select id="tagSelect" multiple size="8" class="select-multi"></select>
-      </div>
-      <div class="selected-tags" id="selectedTagsList"></div>
-    </section>
-
-    <!-- Step 3: Pages -->
+    <!-- Step 2: Posted date cutoff -->
     <section class="panel panel-row">
       <div class="panel-header">
-        <span class="step-badge">03</span>
-        <h2>Pages per Tag</h2>
+        <span class="step-badge">02</span>
+        <h2>Posted Since</h2>
       </div>
-      <input type="number" id="maxPages" class="input input-sm" value="1" min="1" max="20">
+      <p class="panel-hint">Keep scraping pages until jobs are older than this date.</p>
+      <input type="date" id="postedSince" class="input input-sm">
     </section>
 
-    <!-- Step 4 & 5: Keywords -->
+    <!-- Step 3: Keywords -->
     <section class="panel">
       <div class="panel-header">
-        <span class="step-badge">04</span>
+        <span class="step-badge">03</span>
         <h2>Keywords</h2>
       </div>
       <p class="panel-hint">Applied post-scrape against full descriptions.</p>
