@@ -21,8 +21,10 @@ from bs4 import BeautifulSoup
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-BASE_URL      = "https://www.onlinejobs.ph"
+BASE_URL      = "https://onlinejobs.ph"
+ALT_BASE_URL  = "https://www.onlinejobs.ph"
 SEARCH_BASE   = f"{BASE_URL}/jobseekers/jobsearch"
+ALT_SEARCH_BASE = f"{ALT_BASE_URL}/jobseekers/jobsearch"
 JOBS_PER_PAGE = 30
 REQUEST_DELAY = 0.5
 
@@ -44,6 +46,9 @@ HEADERS = {
     )
 }
 
+# Updated dynamically when we discover which domain resolves in the current environment.
+ACTIVE_BASE_URL = BASE_URL
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def clean(text: str) -> str:
@@ -60,21 +65,39 @@ def canonical_url(raw: str) -> str:
         raw = BASE_URL + "/" + raw
     try:
         p = urlparse(raw.lower())
-        return urlunparse((p.scheme, p.netloc, p.path.rstrip("/"), "", "", ""))
+        netloc = p.netloc.removeprefix("www.")
+        return urlunparse((p.scheme, netloc, p.path.rstrip("/"), "", "", ""))
     except Exception:
         return raw.lower().rstrip("/")
 
 
 def tag_url(skill_tag: str, page: int) -> str:
     offset = (page - 1) * JOBS_PER_PAGE
-    path   = SEARCH_BASE if offset == 0 else f"{SEARCH_BASE}/{offset}"
+    search_base = f"{ACTIVE_BASE_URL}/jobseekers/jobsearch"
+    path = search_base if offset == 0 else f"{search_base}/{offset}"
     return f"{path}?jobkeyword=&skill_tags={skill_tag}&fullTime=on&isFromJobsearchForm=1"
 
 
 def fetch_page(url: str) -> BeautifulSoup:
-    resp = requests.get(url, headers=HEADERS, timeout=20)
-    resp.raise_for_status()
-    return BeautifulSoup(resp.text, "html.parser")
+    global ACTIVE_BASE_URL
+    candidates = [url]
+    if url.startswith(BASE_URL):
+        candidates.append(url.replace(BASE_URL, ALT_BASE_URL, 1))
+    elif url.startswith(ALT_BASE_URL):
+        candidates.append(url.replace(ALT_BASE_URL, BASE_URL, 1))
+
+    last_exc = None
+    for candidate in candidates:
+        try:
+            resp = requests.get(candidate, headers=HEADERS, timeout=20)
+            resp.raise_for_status()
+            parsed = urlparse(resp.url)
+            ACTIVE_BASE_URL = f"{parsed.scheme}://{parsed.netloc}".removesuffix("/")
+            return BeautifulSoup(resp.text, "html.parser")
+        except requests.RequestException as exc:
+            last_exc = exc
+
+    raise last_exc
 
 # ── Tag scraping ──────────────────────────────────────────────────────────────
 
@@ -84,13 +107,26 @@ def scrape_tags() -> tuple[list[dict], list[str]]:
     Returns (tags, log_lines) where tags is a list of {"id", "name"} dicts.
     """
     logs = []
+    global ACTIVE_BASE_URL
     logs.append(f"🌐 Fetching tag catalogue from {SEARCH_BASE} …")
 
-    try:
-        resp = requests.get(SEARCH_BASE, headers=HEADERS, timeout=20)
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        logs.append(f"❌ Failed to fetch page: {e}")
+    resp = None
+    last_exc = None
+    for candidate in (SEARCH_BASE, ALT_SEARCH_BASE):
+        try:
+            resp = requests.get(candidate, headers=HEADERS, timeout=20)
+            resp.raise_for_status()
+            parsed = urlparse(resp.url)
+            ACTIVE_BASE_URL = f"{parsed.scheme}://{parsed.netloc}".removesuffix("/")
+            if candidate != SEARCH_BASE:
+                logs.append(f"ℹ️ Primary domain failed; using fallback domain: {candidate}")
+            break
+        except requests.RequestException as e:
+            last_exc = e
+            logs.append(f"⚠️ Failed to fetch {candidate}: {e}")
+
+    if resp is None:
+        logs.append(f"❌ Failed to fetch page from all known domains: {last_exc}")
         return [], logs
 
     seen: set[str] = set()
