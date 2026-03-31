@@ -37,7 +37,16 @@ import scraper
 app = FastAPI(title="Job Hunter Dashboard")
 
 BASE_DIR = Path(__file__).parent
-app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+STATIC_DIR = BASE_DIR / "static"
+TEMPLATES_DIR = BASE_DIR / "templates"
+
+# Support both repository layouts:
+# - static/ + templates/ folders (recommended)
+# - root-level app.js/style.css/index.html files (fallback)
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+else:
+    app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
 
 # Single shared DB connection (SQLite is fine for single-user local use)
 _conn = None
@@ -53,7 +62,13 @@ def get_db():
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return (BASE_DIR / "templates" / "index.html").read_text()
+    template_index = TEMPLATES_DIR / "index.html"
+    root_index = BASE_DIR / "index.html"
+    if template_index.exists():
+        return template_index.read_text()
+    if root_index.exists():
+        return root_index.read_text()
+    raise HTTPException(status_code=500, detail="Could not find index.html")
 
 # ── Jobs API ──────────────────────────────────────────────────────────────────
 

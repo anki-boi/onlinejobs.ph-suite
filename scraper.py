@@ -13,6 +13,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
+from html import unescape
 from urllib.parse import urlparse, urlunparse
 
 import requests
@@ -92,12 +93,30 @@ def scrape_tags() -> tuple[list[dict], list[str]]:
         logs.append(f"❌ Failed to fetch page: {e}")
         return [], logs
 
-    soup      = BeautifulSoup(resp.text, "html.parser")
+    seen: set[str] = set()
+    tags: list[dict] = []
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    def add_tag(value: str, raw_name: str):
+        tag_id = (value or "").strip()
+        if not tag_id or not re.match(r"^\d+$", tag_id) or tag_id in seen:
+            return
+
+        # data-name is often HTML-encoded, e.g.
+        # "&lt;small&gt;Category &lt;span&gt;»&lt;/span&gt; &lt;/small&gt; Skill"
+        decoded = unescape(raw_name or "")
+        name = clean(BeautifulSoup(decoded, "html.parser").get_text(" ", strip=True))
+        if not name:
+            return
+
+        seen.add(tag_id)
+        tags.append({"id": tag_id, "name": name})
+
+    # Strategy 1 (legacy): <select name="skill_tags"><option value="123">…</option></select>
     select_el = (
         soup.find("select", {"name": re.compile(r"skill_tags", re.I)})
         or soup.find("select", {"id": re.compile(r"skill_tags", re.I)})
     )
-
     if not select_el:
         for sel in soup.find_all("select"):
             options = sel.find_all("option")
@@ -105,21 +124,28 @@ def scrape_tags() -> tuple[list[dict], list[str]]:
             if len(numeric) > 20:
                 select_el = sel
                 break
+    if select_el:
+        for option in select_el.find_all("option"):
+            add_tag(option.get("value", ""), option.get_text())
+        logs.append(f"ℹ️ Parsed {len(tags)} tag(s) from <select> options.")
 
-    if not select_el:
-        logs.append("❌ Could not locate the skill_tags <select> element. Site layout may have changed.")
+    # Strategy 2 (current UI): dropdown links with data-id/data-name
+    if not tags:
+        for el in soup.select(".dropdown-skill-item[data-id][data-name], a[data-type='add'][data-id][data-name]"):
+            add_tag(el.get("data-id", ""), el.get("data-name", "") or el.get_text())
+        if tags:
+            logs.append(f"ℹ️ Parsed {len(tags)} tag(s) from dropdown data-* attributes.")
+
+    # Strategy 3 (fallback): broad scan for numeric data-id + data-name
+    if not tags:
+        for el in soup.select("[data-id][data-name]"):
+            add_tag(el.get("data-id", ""), el.get("data-name", ""))
+        if tags:
+            logs.append(f"ℹ️ Parsed {len(tags)} tag(s) from generic data-* attributes.")
+
+    if not tags:
+        logs.append("❌ Could not locate skill tags in page HTML (select/options or dropdown data-*). Site layout may have changed.")
         return [], logs
-
-    seen: set[str] = set()
-    tags: list[dict] = []
-    for option in select_el.find_all("option"):
-        value = (option.get("value") or "").strip()
-        name  = clean(option.get_text())
-        if not value or not re.match(r"^\d+$", value) or not name:
-            continue
-        if value not in seen:
-            seen.add(value)
-            tags.append({"id": value, "name": name})
 
     tags.sort(key=lambda t: t["name"].lower())
     logs.append(f"✅ Found {len(tags)} skill tag(s).")
