@@ -1,0 +1,403 @@
+"""
+scraper.py — All scraping logic as importable, generator-based functions.
+Each public function yields log-line strings so callers (CLI or web) can
+stream progress in real time.
+
+Functions:
+    scrape_tags()               → yields log lines, returns tag list via final yield
+    harvest_links(...)          → yields log lines
+    check_and_fill_jobs(...)    → yields log lines
+"""
+
+import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date
+from urllib.parse import urlparse, urlunparse
+
+import requests
+from bs4 import BeautifulSoup
+
+# ── Config ────────────────────────────────────────────────────────────────────
+
+BASE_URL      = "https://www.onlinejobs.ph"
+SEARCH_BASE   = f"{BASE_URL}/jobseekers/jobsearch"
+JOBS_PER_PAGE = 30
+REQUEST_DELAY = 0.5
+
+CLOSED_STATUS = "Closed"
+OPEN_STATUS   = "Open"
+
+CLOSED_PHRASES = [
+    "this job has been closed",
+    "job has been closed",
+    "this job is no longer available",
+    "position has been filled",
+]
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
+}
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def clean(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip()
+
+
+def canonical_url(raw: str) -> str:
+    raw = raw.strip()
+    if raw.startswith("//"):
+        raw = "https:" + raw
+    elif raw.startswith("/"):
+        raw = BASE_URL + raw
+    elif not raw.startswith("http"):
+        raw = BASE_URL + "/" + raw
+    try:
+        p = urlparse(raw.lower())
+        return urlunparse((p.scheme, p.netloc, p.path.rstrip("/"), "", "", ""))
+    except Exception:
+        return raw.lower().rstrip("/")
+
+
+def tag_url(skill_tag: str, page: int) -> str:
+    offset = (page - 1) * JOBS_PER_PAGE
+    path   = SEARCH_BASE if offset == 0 else f"{SEARCH_BASE}/{offset}"
+    return f"{path}?jobkeyword=&skill_tags={skill_tag}&fullTime=on&isFromJobsearchForm=1"
+
+
+def fetch_page(url: str) -> BeautifulSoup:
+    resp = requests.get(url, headers=HEADERS, timeout=20)
+    resp.raise_for_status()
+    return BeautifulSoup(resp.text, "html.parser")
+
+# ── Tag scraping ──────────────────────────────────────────────────────────────
+
+def scrape_tags() -> tuple[list[dict], list[str]]:
+    """
+    Fetch all skill tags from the search page.
+    Returns (tags, log_lines) where tags is a list of {"id", "name"} dicts.
+    """
+    logs = []
+    logs.append(f"🌐 Fetching tag catalogue from {SEARCH_BASE} …")
+
+    try:
+        resp = requests.get(SEARCH_BASE, headers=HEADERS, timeout=20)
+        resp.raise_for_status()
+    except requests.RequestException as e:
+        logs.append(f"❌ Failed to fetch page: {e}")
+        return [], logs
+
+    soup      = BeautifulSoup(resp.text, "html.parser")
+    select_el = (
+        soup.find("select", {"name": re.compile(r"skill_tags", re.I)})
+        or soup.find("select", {"id": re.compile(r"skill_tags", re.I)})
+    )
+
+    if not select_el:
+        for sel in soup.find_all("select"):
+            options = sel.find_all("option")
+            numeric = [o for o in options if re.match(r"^\d+$", (o.get("value") or "").strip())]
+            if len(numeric) > 20:
+                select_el = sel
+                break
+
+    if not select_el:
+        logs.append("❌ Could not locate the skill_tags <select> element. Site layout may have changed.")
+        return [], logs
+
+    seen: set[str] = set()
+    tags: list[dict] = []
+    for option in select_el.find_all("option"):
+        value = (option.get("value") or "").strip()
+        name  = clean(option.get_text())
+        if not value or not re.match(r"^\d+$", value) or not name:
+            continue
+        if value not in seen:
+            seen.add(value)
+            tags.append({"id": value, "name": name})
+
+    tags.sort(key=lambda t: t["name"].lower())
+    logs.append(f"✅ Found {len(tags)} skill tag(s).")
+    return tags, logs
+
+# ── Link harvesting ───────────────────────────────────────────────────────────
+
+def harvest_links(
+    tags: dict[str, str],         # {label: skill_tag_id}
+    existing_links: set[str],
+    hidden_links: set[str],
+    max_pages: int = 1,
+):
+    """
+    Generator. Yields log-line strings.
+    Last yielded value is a list of new job stub dicts when prefixed with "RESULT:".
+    Actually yields plain strings; caller should check for the RESULT sentinel.
+
+    Yields strings of the form:
+        "LOG: <message>"       — display to user
+        "RESULT: <json>"       — final list of new stubs (JSON-encoded)
+    """
+    import json
+
+    collected: dict[str, dict] = {}
+    today = date.today().isoformat()
+
+    for tag_label, skill_tag in tags.items():
+        yield f"LOG: 🏷  Searching tag: {tag_label}"
+
+        for page in range(1, max_pages + 1):
+            url = tag_url(skill_tag, page)
+            yield f"LOG:   Page {page} → {url}"
+
+            try:
+                soup = fetch_page(url)
+            except requests.RequestException as exc:
+                yield f"LOG:   ⚠  Could not fetch: {exc}"
+                break
+
+            boxes = soup.select(".jobpost-cat-box.latest-job-post")
+            if not boxes:
+                yield f"LOG:   No job boxes found — stopping tag."
+                break
+
+            found = skipped_existing = skipped_hidden = 0
+            for box in boxes:
+                link_tag = box.select_one("a[href^='/jobseekers/job/']")
+                if not link_tag:
+                    continue
+                link = canonical_url(link_tag.get("href", ""))
+                if not link:
+                    continue
+                if link in hidden_links:
+                    skipped_hidden += 1
+                    continue
+                if link in existing_links:
+                    skipped_existing += 1
+                    continue
+                collected[link] = {
+                    "job_link":   link,
+                    "search_tag": tag_label,
+                    "date_found": today,
+                }
+                found += 1
+
+            parts = [f"{found} new"]
+            if skipped_existing:
+                parts.append(f"{skipped_existing} already in DB")
+            if skipped_hidden:
+                parts.append(f"{skipped_hidden} hidden/suppressed")
+            yield f"LOG:   → {', '.join(parts)}"
+
+            if found == 0:
+                break
+
+    new_stubs = list(collected.values())
+    yield f"LOG: ✅ Harvest complete — {len(new_stubs)} new link(s) to check."
+    yield f"RESULT:{json.dumps(new_stubs)}"
+
+# ── Job detail checking ───────────────────────────────────────────────────────
+
+def check_and_fill_jobs(
+    jobs: list[tuple[int, str, str]],   # (id, job_link, current_status)
+    workers: int = 5,
+):
+    """
+    Generator. Yields log-line strings as each job is checked.
+    Last line is a SUMMARY: sentinel with counts.
+    """
+    if not jobs:
+        yield "LOG: ✅ No jobs to check."
+        return
+
+    yield f"LOG: 🔍 Checking {len(jobs)} job(s) with {workers} worker(s)…"
+
+    closed_count = open_count = 0
+    detail_counts = {k: 0 for k in ("job_title", "company", "salary", "tags_found", "description")}
+    results: list[tuple[int, dict]] = []
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(_check_one, job): job for job in jobs}
+        done = 0
+        for future in as_completed(futures):
+            done += 1
+            job_id, details = future.result()
+            results.append((job_id, details))
+
+            status = details["status"]
+            reason = details["reason"]
+            url    = details["url"]
+
+            if status == CLOSED_STATUS:
+                closed_count += 1
+                icon = "🔴"
+            else:
+                open_count += 1
+                icon = "🟢"
+
+            filled = [f for f in ("job_title", "company", "salary", "tags_found", "description") if details.get(f)]
+            for f in filled:
+                detail_counts[f] += 1
+
+            short_url   = url.replace("https://www.onlinejobs.ph", "")
+            detail_note = f"  ✅ {', '.join(filled)}" if filled else "  ⚠  no details"
+            yield f"LOG: [{done}/{len(jobs)}] {icon} {status:<8} {short_url} ({reason}){detail_note}"
+
+    import json
+    summary = {
+        "open": open_count,
+        "closed": closed_count,
+        "total": len(jobs),
+        "details": detail_counts,
+        "results": [(jid, det) for jid, det in results],
+    }
+    yield f"SUMMARY:{json.dumps(summary, default=str)}"
+
+
+def _check_one(job: tuple[int, str, str]) -> tuple[int, dict]:
+    job_id, url, _ = job
+    time.sleep(REQUEST_DELAY)
+    details = _scrape_job_page(url)
+    details["url"] = url
+    return job_id, details
+
+
+def _scrape_job_page(url: str) -> dict:
+    result: dict = {
+        "status":      CLOSED_STATUS,
+        "reason":      "",
+        "description": None,
+        "job_title":   None,
+        "company":     None,
+        "salary":      None,
+        "tags_found":  None,
+    }
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        if resp.status_code == 404:
+            result["reason"] = "404 Not Found"
+            return result
+        if resp.status_code >= 400:
+            result["reason"] = f"HTTP {resp.status_code}"
+            return result
+
+        soup      = BeautifulSoup(resp.text, "html.parser")
+        page_text = soup.get_text(separator=" ").lower()
+
+        closed_banner = soup.select_one("h3.text-warning")
+        if closed_banner and "closed" in closed_banner.get_text().lower():
+            result["status"] = CLOSED_STATUS
+            result["reason"] = "Job closed (Banner)"
+            _fill_details(soup, result)
+            return result
+
+        for phrase in CLOSED_PHRASES:
+            if phrase in page_text:
+                result["status"] = CLOSED_STATUS
+                result["reason"] = "Job closed (Text)"
+                _fill_details(soup, result)
+                return result
+
+        result["status"] = OPEN_STATUS
+        result["reason"] = "Open"
+        _fill_details(soup, result)
+        return result
+
+    except requests.exceptions.Timeout:
+        result["reason"] = "Timeout"
+    except requests.exceptions.ConnectionError:
+        result["reason"] = "Connection error"
+    except Exception as exc:
+        result["reason"] = f"Error: {exc}"
+    return result
+
+
+def _fill_details(soup: BeautifulSoup, result: dict) -> None:
+    result["description"] = _scrape_description(soup)
+    result["job_title"]   = _scrape_title(soup)
+    result["company"]     = _scrape_company(soup)
+    result["salary"]      = _scrape_salary(soup)
+    result["tags_found"]  = _scrape_tags_found(soup)
+
+
+def _scrape_description(soup: BeautifulSoup) -> str | None:
+    el = soup.select_one("#job-description")
+    if el:
+        return clean(el.get_text(separator="\n"))
+    overview = soup.find("div", class_="card-header", string=lambda t: t and "JOB OVERVIEW" in t)
+    if overview:
+        body = overview.find_next_sibling("div", class_="card-body")
+        if body:
+            return clean(body.get_text(separator="\n"))
+    return None
+
+
+def _scrape_title(soup: BeautifulSoup) -> str | None:
+    for sel in ("h1.job-title", "h2.job-title", ".job-header h1", ".job-header h2", "h1", "h2"):
+        el = soup.select_one(sel)
+        if el:
+            text = clean(el.get_text())
+            if text:
+                return text
+    title_tag = soup.find("title")
+    if title_tag:
+        raw = clean(title_tag.get_text())
+        return raw.split("|")[0].strip() or None
+    return None
+
+
+def _scrape_company(soup: BeautifulSoup) -> str | None:
+    for sel in (".employer-name", ".company-name", "a[href*='/jobseekers/employer/']", ".job-company"):
+        el = soup.select_one(sel)
+        if el:
+            text = clean(el.get_text())
+            if text:
+                return text
+    return None
+
+
+def _scrape_salary(soup: BeautifulSoup) -> str | None:
+    for sel in (".salary", ".pay-rate", "dd.col", "[data-salary]"):
+        el = soup.select_one(sel)
+        if el:
+            text = clean(el.get_text())
+            if text:
+                return text
+    return None
+
+
+def _scrape_tags_found(soup: BeautifulSoup) -> str | None:
+    tag_texts: list[str] = []
+
+    for a in soup.select("a[href*='skill_tags='], a[href*='/jobseekers/jobsearch'][href*='skill']"):
+        text = clean(a.get_text())
+        if text and text not in tag_texts:
+            tag_texts.append(text)
+    if tag_texts:
+        return ", ".join(tag_texts)
+
+    for sel in (
+        ".job-tags a", ".job-tags span",
+        ".skill-tags a", ".skill-tags span",
+        ".tags a", ".tags span",
+        "[class*='tag'] a", "[class*='badge'] a",
+    ):
+        for el in soup.select(sel):
+            text = clean(el.get_text())
+            if text and text not in tag_texts:
+                tag_texts.append(text)
+        if tag_texts:
+            return ", ".join(tag_texts)
+
+    for a in soup.select("a[href*='jobsearch']"):
+        href = a.get("href", "")
+        if "skill_tags" in href or "tag" in href.lower():
+            text = clean(a.get_text())
+            if text and text not in tag_texts:
+                tag_texts.append(text)
+
+    return ", ".join(tag_texts) if tag_texts else None
