@@ -12,9 +12,9 @@ Functions:
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date
+from datetime import date, datetime
 from html import unescape
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import quote_plus, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -71,11 +71,12 @@ def canonical_url(raw: str) -> str:
         return raw.lower().rstrip("/")
 
 
-def tag_url(skill_tag: str, page: int) -> str:
+def search_url(keyword: str, page: int) -> str:
     offset = (page - 1) * JOBS_PER_PAGE
     search_base = f"{ACTIVE_BASE_URL}/jobseekers/jobsearch"
     path = search_base if offset == 0 else f"{search_base}/{offset}"
-    return f"{path}?jobkeyword=&skill_tags={skill_tag}&fullTime=on&isFromJobsearchForm=1"
+    kw = quote_plus((keyword or "").strip())
+    return f"{path}?jobkeyword={kw}&skill_tags=&gig=on&partTime=on&fullTime=on&isFromJobsearchForm=1"
 
 
 def fetch_page(url: str) -> BeautifulSoup:
@@ -190,10 +191,10 @@ def scrape_tags() -> tuple[list[dict], list[str]]:
 # ── Link harvesting ───────────────────────────────────────────────────────────
 
 def harvest_links(
-    tags: dict[str, str],         # {label: skill_tag_id}
+    keyword: str,
     existing_links: set[str],
     hidden_links: set[str],
-    max_pages: int = 1,
+    posted_since: date | None = None,
 ):
     """
     Generator. Yields log-line strings.
@@ -209,58 +210,99 @@ def harvest_links(
     collected: dict[str, dict] = {}
     today = date.today().isoformat()
 
-    for tag_label, skill_tag in tags.items():
-        yield f"LOG: 🏷  Searching tag: {tag_label}"
+    keyword = (keyword or "").strip()
+    if not keyword:
+        yield "LOG: ⚠ Empty keyword; nothing to search."
+        yield "RESULT:[]"
+        return
 
-        for page in range(1, max_pages + 1):
-            url = tag_url(skill_tag, page)
-            yield f"LOG:   Page {page} → {url}"
+    yield f"LOG: 🔎 Searching keyword: {keyword}"
+    if posted_since:
+        yield f"LOG: 📅 Scraping until posts older than: {posted_since.isoformat()}"
 
-            try:
-                soup = fetch_page(url)
-            except requests.RequestException as exc:
-                yield f"LOG:   ⚠  Could not fetch: {exc}"
-                break
+    page = 1
+    while True:
+        url = search_url(keyword, page)
+        yield f"LOG:   Page {page} → {url}"
 
-            boxes = soup.select(".jobpost-cat-box.latest-job-post")
-            if not boxes:
-                yield f"LOG:   No job boxes found — stopping tag."
-                break
+        try:
+            soup = fetch_page(url)
+        except requests.RequestException as exc:
+            yield f"LOG:   ⚠  Could not fetch: {exc}"
+            break
 
-            found = skipped_existing = skipped_hidden = 0
-            for box in boxes:
-                link_tag = box.select_one("a[href^='/jobseekers/job/']")
-                if not link_tag:
-                    continue
-                link = canonical_url(link_tag.get("href", ""))
-                if not link:
-                    continue
-                if link in hidden_links:
-                    skipped_hidden += 1
-                    continue
-                if link in existing_links:
-                    skipped_existing += 1
-                    continue
-                collected[link] = {
-                    "job_link":   link,
-                    "search_tag": tag_label,
-                    "date_found": today,
-                }
-                found += 1
+        boxes = soup.select(".jobpost-cat-box.latest-job-post")
+        if not boxes:
+            yield "LOG:   No job boxes found — stopping search."
+            break
 
-            parts = [f"{found} new"]
-            if skipped_existing:
-                parts.append(f"{skipped_existing} already in DB")
-            if skipped_hidden:
-                parts.append(f"{skipped_hidden} hidden/suppressed")
-            yield f"LOG:   → {', '.join(parts)}"
+        found = skipped_existing = skipped_hidden = skipped_old = 0
+        parsed_dates: list[date] = []
+        for box in boxes:
+            posted = _extract_posted_date(box)
+            if posted:
+                parsed_dates.append(posted)
+            if posted_since and posted and posted < posted_since:
+                skipped_old += 1
+                continue
 
-            if found == 0:
-                break
+            link_tag = box.select_one("a[href^='/jobseekers/job/']")
+            if not link_tag:
+                continue
+            link = canonical_url(link_tag.get("href", ""))
+            if not link:
+                continue
+            if link in hidden_links:
+                skipped_hidden += 1
+                continue
+            if link in existing_links:
+                skipped_existing += 1
+                continue
+            collected[link] = {
+                "job_link":   link,
+                "search_tag": keyword,
+                "date_found": today,
+            }
+            found += 1
+
+        parts = [f"{found} new"]
+        if skipped_existing:
+            parts.append(f"{skipped_existing} already in DB")
+        if skipped_hidden:
+            parts.append(f"{skipped_hidden} hidden/suppressed")
+        if skipped_old:
+            parts.append(f"{skipped_old} older than cutoff")
+        yield f"LOG:   → {', '.join(parts)}"
+
+        if posted_since and parsed_dates and min(parsed_dates) < posted_since:
+            yield "LOG:   Reached jobs older than cutoff date — stopping search."
+            break
+
+        page += 1
+        time.sleep(REQUEST_DELAY)
 
     new_stubs = list(collected.values())
     yield f"LOG: ✅ Harvest complete — {len(new_stubs)} new link(s) to check."
     yield f"RESULT:{json.dumps(new_stubs)}"
+
+
+def _extract_posted_date(box) -> date | None:
+    text = clean(box.get_text(" ", strip=True))
+    m = re.search(r"posted on\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})", text, flags=re.I)
+    if m:
+        try:
+            return datetime.strptime(m.group(1), "%B %d, %Y").date()
+        except ValueError:
+            pass
+    m = re.search(r"posted on\s+(\d{1,2}/\d{1,2}/\d{2,4})", text, flags=re.I)
+    if m:
+        raw = m.group(1)
+        for fmt in ("%m/%d/%Y", "%m/%d/%y"):
+            try:
+                return datetime.strptime(raw, fmt).date()
+            except ValueError:
+                continue
+    return None
 
 # ── Job detail checking ───────────────────────────────────────────────────────
 
