@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Job Hunter</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:ital,wght@0,400;0,500;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────────────────────── -->
+<header>
+  <div class="header-left">
+    <span class="logo">⟨JH⟩</span>
+    <span class="logo-label">Job Hunter</span>
+  </div>
+  <div class="header-stats" id="headerStats">
+    <!-- populated by JS -->
+  </div>
+</header>
+
+<!-- ── Main layout ───────────────────────────────────────────────────────── -->
+<div class="layout">
+
+  <!-- ── Sidebar ────────────────────────────────────────────────────────── -->
+  <aside class="sidebar">
+
+    <!-- Step 1: Tag catalogue -->
+    <section class="panel">
+      <div class="panel-header">
+        <span class="step-badge">01</span>
+        <h2>Tag Catalogue</h2>
+      </div>
+      <p class="panel-hint">Sync available skill tags from OnlineJobs.ph before searching.</p>
+      <button class="btn btn-outline" id="btnRefreshTags">↻ Refresh Tags</button>
+      <div class="tag-count" id="tagCount">— tags loaded</div>
+    </section>
+
+    <!-- Step 2: Search config -->
+    <section class="panel">
+      <div class="panel-header">
+        <span class="step-badge">02</span>
+        <h2>Search Tags</h2>
+      </div>
+      <p class="panel-hint">Select tags to search. Hold Ctrl/⌘ to pick multiple.</p>
+      <div class="tag-search-wrap">
+        <input type="text" id="tagSearchInput" class="input" placeholder="Filter tags…">
+      </div>
+      <div class="tag-select-wrap">
+        <select id="tagSelect" multiple size="8" class="select-multi"></select>
+      </div>
+      <div class="selected-tags" id="selectedTagsList"></div>
+    </section>
+
+    <!-- Step 3: Pages -->
+    <section class="panel panel-row">
+      <div class="panel-header">
+        <span class="step-badge">03</span>
+        <h2>Pages per Tag</h2>
+      </div>
+      <input type="number" id="maxPages" class="input input-sm" value="1" min="1" max="20">
+    </section>
+
+    <!-- Step 4 & 5: Keywords -->
+    <section class="panel">
+      <div class="panel-header">
+        <span class="step-badge">04</span>
+        <h2>Keywords</h2>
+      </div>
+      <p class="panel-hint">Applied post-scrape against full descriptions.</p>
+
+      <label class="field-label">✅ Keep matching (positive)</label>
+      <div class="keyword-input-wrap">
+        <input type="text" id="posKeywordInput" class="input" placeholder="billing, medical…">
+        <button class="btn-tag-add" id="btnAddPos">+</button>
+      </div>
+      <div class="keyword-chips" id="posChips"></div>
+
+      <label class="field-label" style="margin-top:12px">🚫 Exclude (negative)</label>
+      <div class="keyword-input-wrap">
+        <input type="text" id="negKeywordInput" class="input" placeholder="teaching, sales…">
+        <button class="btn-tag-add" id="btnAddNeg">+</button>
+      </div>
+      <div class="keyword-chips" id="negChips"></div>
+
+      <button class="btn btn-outline" id="btnApplyKeywords" style="margin-top:12px" disabled>
+        Apply Keyword Filters
+      </button>
+    </section>
+
+    <!-- Run -->
+    <section class="panel">
+      <button class="btn btn-primary" id="btnRun">▶ Run Pipeline</button>
+      <button class="btn btn-ghost" id="btnCheckOnly" style="margin-top:8px">
+        ↻ Re-check Open Jobs
+      </button>
+    </section>
+
+  </aside>
+
+  <!-- ── Main content ───────────────────────────────────────────────────── -->
+  <main class="content">
+
+    <!-- Log console -->
+    <div class="console-wrap" id="consoleWrap" style="display:none">
+      <div class="console-header">
+        <span>Pipeline Log</span>
+        <button class="console-close" id="btnCloseConsole">✕</button>
+      </div>
+      <div class="console" id="console"></div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <input type="text" class="input search-input" id="tableSearch" placeholder="Search jobs…">
+        <select class="select" id="statusFilter">
+          <option value="">All statuses</option>
+          <option value="New">New</option>
+          <option value="Interested">Interested</option>
+          <option value="Applied">Applied</option>
+          <option value="Interviewing">Interviewing</option>
+          <option value="Offer">Offer</option>
+          <option value="Hired">Hired</option>
+          <option value="Rejected">Rejected</option>
+        </select>
+        <label class="checkbox-label">
+          <input type="checkbox" id="showHidden"> Show hidden
+        </label>
+      </div>
+      <div class="toolbar-right">
+        <span class="result-count" id="resultCount"></span>
+      </div>
+    </div>
+
+    <!-- Jobs table -->
+    <div class="table-wrap">
+      <table class="jobs-table" id="jobsTable">
+        <thead>
+          <tr>
+            <th class="col-status">Status</th>
+            <th class="col-title">Title</th>
+            <th class="col-company">Company</th>
+            <th class="col-tag">Search Tag</th>
+            <th class="col-salary">Salary</th>
+            <th class="col-date">Found</th>
+            <th class="col-actions"></th>
+          </tr>
+        </thead>
+        <tbody id="jobsBody">
+          <tr class="empty-row"><td colspan="7">No jobs yet. Run the pipeline to get started.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </main>
+</div>
+
+<!-- ── Job detail modal ───────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modalOverlay" style="display:none">
+  <div class="modal">
+    <div class="modal-header">
+      <div>
+        <div class="modal-title" id="modalTitle">—</div>
+        <a class="modal-link" id="modalLink" href="#" target="_blank">View on OnlineJobs.ph ↗</a>
+      </div>
+      <button class="modal-close" id="btnCloseModal">✕</button>
+    </div>
+    <div class="modal-meta" id="modalMeta"></div>
+    <div class="modal-tags" id="modalTags"></div>
+    <div class="modal-desc" id="modalDesc"></div>
+    <div class="modal-footer">
+      <div class="modal-notes-wrap">
+        <label class="field-label">Notes</label>
+        <textarea class="textarea" id="modalNotes" rows="3" placeholder="Your notes…"></textarea>
+        <button class="btn btn-ghost btn-sm" id="btnSaveNotes">Save Notes</button>
+      </div>
+      <div class="modal-status-wrap">
+        <label class="field-label">Status</label>
+        <select class="select" id="modalStatus">
+          <option>New</option>
+          <option>Interested</option>
+          <option>Applied</option>
+          <option>Interviewing</option>
+          <option>Offer</option>
+          <option>Hired</option>
+          <option>Rejected</option>
+          <option>Hidden</option>
+        </select>
+        <button class="btn btn-primary btn-sm" id="btnSaveStatus">Update Status</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
