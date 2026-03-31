@@ -14,15 +14,15 @@ Open http://localhost:8000
 
 ## Workflow
 
-1. **Refresh Tags** — sync the full skill-tag catalogue from OnlineJobs.ph
-2. **Select tags** from the dropdown (filter the list with the search box)
-3. **Set pages per tag** — how deep to scrape per tag (1 page = ~30 jobs)
-4. **Add keywords** — positive (keep) and negative (hide) applied post-scrape
-5. **Run Pipeline** — harvests links, then fetches full details for each
-6. **Apply Keyword Filters** — hides non-matching jobs from the dashboard
+1. **Enter Search Keyword** — search jobs by keyword (e.g., "medical", "bookkeeping", "designer")
+2. **Set Posted Since** (optional) — only scrape jobs posted after a specific date
+3. **Add Keywords** — positive (keep) and negative (hide) filters applied post-scrape
+4. **Run Pipeline** — harvests links, then fetches full details for each job
+5. **Apply Keyword Filters** — hide jobs that don't match your positive keywords or match negative keywords
 
 ## Notes
 
+- **Tag searching is deprecated** — use keyword search instead
 - Hidden jobs stay in the DB for deduplication — they won't resurface in future scrapes
 - Re-check Open Jobs re-fetches details for all New/Open jobs (useful after a partial run)
 - Click any row to open the detail modal — update status, add notes
