@@ -66,9 +66,9 @@ def index():
     template_index = TEMPLATES_DIR / "index.html"
     root_index = BASE_DIR / "index.html"
     if template_index.exists():
-        return template_index.read_text()
+        return template_index.read_text(encoding="utf-8")
     if root_index.exists():
-        return root_index.read_text()
+        return root_index.read_text(encoding="utf-8")
     raise HTTPException(status_code=500, detail="Could not find index.html")
 
 # ── Jobs API ──────────────────────────────────────────────────────────────────
