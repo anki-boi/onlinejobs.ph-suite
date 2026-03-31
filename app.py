@@ -21,6 +21,7 @@ Run:
 
 import json
 import threading
+from datetime import date
 from pathlib import Path
 from typing import Generator
 
@@ -168,8 +169,8 @@ def stream_generator(gen: Generator) -> Generator:
 # ── Pipeline endpoints ────────────────────────────────────────────────────────
 
 class PipelineRequest(BaseModel):
-    tag_ids: list[str]        # which skill_tag IDs to search
-    max_pages: int = 1
+    keyword: str = "medical"
+    posted_since: date | None = None
     workers: int = 5
 
 @app.post("/api/pipeline/run")
@@ -180,12 +181,9 @@ async def run_pipeline(body: PipelineRequest):
     """
     conn = get_db()
 
-    # Build tag dict from DB
-    all_tags  = {r["id"]: r["name"] for r in db.get_skill_tags(conn)}
-    tags_dict = {all_tags[tid]: tid for tid in body.tag_ids if tid in all_tags}
-
-    if not tags_dict:
-        raise HTTPException(status_code=400, detail="No valid tags selected")
+    keyword = body.keyword.strip()
+    if not keyword:
+        raise HTTPException(status_code=400, detail="Keyword is required")
 
     existing = db.get_existing_links(conn)
     hidden   = db.get_hidden_links(conn)
@@ -193,7 +191,7 @@ async def run_pipeline(body: PipelineRequest):
     def generate():
         # Phase 1: harvest links
         new_stubs: list[dict] = []
-        for line in scraper.harvest_links(tags_dict, existing, hidden, body.max_pages):
+        for line in scraper.harvest_links(keyword, existing, hidden, body.posted_since):
             if line.startswith("LOG:"):
                 yield sse_event(line[4:].strip(), event="log")
             elif line.startswith("RESULT:"):

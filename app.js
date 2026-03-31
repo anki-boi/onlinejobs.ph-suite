@@ -2,10 +2,8 @@
 
 const state = {
   jobs: [],
-  tags: [],
   posKeywords: [],
   negKeywords: [],
-  selectedTags: new Set(),
   currentJobId: null,
   searchQuery: '',
   statusFilter: '',
@@ -18,11 +16,8 @@ const $ = id => document.getElementById(id);
 
 const els = {
   headerStats:    $('headerStats'),
-  tagCount:       $('tagCount'),
-  tagSearchInput: $('tagSearchInput'),
-  tagSelect:      $('tagSelect'),
-  selectedTagsList: $('selectedTagsList'),
-  maxPages:       $('maxPages'),
+  searchKeyword:  $('searchKeyword'),
+  postedSince:    $('postedSince'),
   posKeywordInput: $('posKeywordInput'),
   negKeywordInput: $('negKeywordInput'),
   btnAddPos:      $('btnAddPos'),
@@ -30,7 +25,6 @@ const els = {
   posChips:       $('posChips'),
   negChips:       $('negChips'),
   btnApplyKeywords: $('btnApplyKeywords'),
-  btnRefreshTags: $('btnRefreshTags'),
   btnRun:         $('btnRun'),
   btnCheckOnly:   $('btnCheckOnly'),
   consoleWrap:    $('consoleWrap'),
@@ -165,74 +159,6 @@ async function refreshStats() {
   } catch {}
 }
 
-// ── Tags ───────────────────────────────────────────────────────────────────
-
-async function loadTags() {
-  try {
-    const tags = await api('GET', '/api/tags');
-    state.tags = tags;
-    renderTagSelect(tags);
-    els.tagCount.textContent = `${tags.length} tag${tags.length !== 1 ? 's' : ''} loaded`;
-  } catch {
-    els.tagCount.textContent = 'Failed to load tags';
-  }
-}
-
-function renderTagSelect(tags) {
-  const query = els.tagSearchInput.value.toLowerCase();
-  const filtered = tags.filter(t => t.name.toLowerCase().includes(query));
-  els.tagSelect.innerHTML = filtered.map(t =>
-    `<option value="${t.id}" ${state.selectedTags.has(t.id) ? 'selected' : ''}>${t.name}</option>`
-  ).join('');
-}
-
-function renderSelectedTags() {
-  const tagMap = Object.fromEntries(state.tags.map(t => [t.id, t.name]));
-  els.selectedTagsList.innerHTML = [...state.selectedTags].map(id =>
-    `<span class="chip chip-tag">
-      ${tagMap[id] || id}
-      <button class="chip-remove" data-tag="${id}" title="Remove">×</button>
-    </span>`
-  ).join('');
-}
-
-els.tagSearchInput.addEventListener('input', () => renderTagSelect(state.tags));
-
-els.tagSelect.addEventListener('change', () => {
-  // Sync selected state from <select multiple>
-  state.selectedTags.clear();
-  for (const opt of els.tagSelect.selectedOptions) {
-    state.selectedTags.add(opt.value);
-  }
-  renderSelectedTags();
-});
-
-els.selectedTagsList.addEventListener('click', e => {
-  const btn = e.target.closest('.chip-remove');
-  if (!btn) return;
-  state.selectedTags.delete(btn.dataset.tag);
-  renderTagSelect(state.tags);
-  renderSelectedTags();
-});
-
-els.btnRefreshTags.addEventListener('click', () => {
-  showConsole();
-  setRunning(true);
-  logLine('🌐 Refreshing tag catalogue…');
-
-  streamSSE('GET', '/api/tags/refresh', null, {
-    log:       d => logLine(d),
-    tags_done: d => {
-      const data = JSON.parse(d);
-      if (data.error) { toast(data.error, 'error'); return; }
-      toast(`✅ ${data.count} tags synced`, 'success');
-      loadTags();
-    },
-    complete: () => setRunning(false),
-    error:    e => { toast(`Error: ${e}`, 'error'); setRunning(false); },
-  });
-});
-
 // ── Keywords ───────────────────────────────────────────────────────────────
 
 function renderChips(arr, container, cls) {
@@ -295,7 +221,6 @@ els.btnApplyKeywords.addEventListener('click', async () => {
 function setRunning(running) {
   els.btnRun.disabled        = running;
   els.btnCheckOnly.disabled  = running;
-  els.btnRefreshTags.disabled = running;
   if (running) {
     els.btnRun.classList.add('running');
   } else {
@@ -306,8 +231,9 @@ function setRunning(running) {
 }
 
 els.btnRun.addEventListener('click', () => {
-  if (state.selectedTags.size === 0) {
-    toast('Select at least one tag first', 'error');
+  const keyword = (els.searchKeyword.value || '').trim();
+  if (!keyword) {
+    toast('Keyword is required', 'error');
     return;
   }
 
@@ -316,8 +242,8 @@ els.btnRun.addEventListener('click', () => {
   logLine('▶ Starting pipeline…');
 
   streamSSE('POST', '/api/pipeline/run', {
-    tag_ids:   [...state.selectedTags],
-    max_pages: parseInt(els.maxPages.value) || 1,
+    keyword,
+    posted_since: els.postedSince.value || null,
     workers:   5,
   }, {
     log:          d => logLine(d),
@@ -543,7 +469,7 @@ els.btnSaveNotes.addEventListener('click', async () => {
 // ── Init ───────────────────────────────────────────────────────────────────
 
 async function init() {
-  await Promise.all([loadTags(), loadJobs(), refreshStats()]);
+  await Promise.all([loadJobs(), refreshStats()]);
 }
 
 init();
