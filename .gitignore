@@ -1,1 +1,12 @@
-(empty)
+__pycache__/
+*.pyc
+jobs.db
+jobs.db-shm
+jobs.db-wal
+*.log
+.env
+config.local.json
+_probe.mjs
+_deep_explore.js
+*.egg-info/
+.venv/

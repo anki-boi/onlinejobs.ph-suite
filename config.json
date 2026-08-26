@@ -1,0 +1,10 @@
+{
+  "base_url": "https://www.onlinejobs.ph",
+  "api_url": "https://api.onlinejobs.ph",
+  "db_path": "jobs.db",
+  "request_delay": 1.0,
+  "max_retries": 3,
+  "enrich_workers": 3,
+  "enrich_interval_days": 7,
+  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+}
