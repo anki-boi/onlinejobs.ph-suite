@@ -252,14 +252,22 @@ def enrich_job(
 
 
 def update_status(conn: sqlite3.Connection, row_id: int, new_status: str) -> None:
-    """Update workflow status + write to history."""
+    """Update workflow status + write to history.
+
+    A manual status change always takes over from the keyword filter:
+    the filter_hidden flag is cleared so the filter will never clobber
+    a status the user explicitly set.
+    """
     if new_status not in STATUSES:
         raise ValueError(f"Invalid status: {new_status}")
     row = get_job(conn, row_id)
     if not row:
         raise ValueError(f"Job {row_id} not found")
     old_status = row["status"]
-    conn.execute("UPDATE jobs SET status = ? WHERE id = ?", (new_status, row_id))
+    conn.execute(
+        "UPDATE jobs SET status = ?, filter_hidden = 0, pre_filter_status = '' WHERE id = ?",
+        (new_status, row_id),
+    )
     conn.execute(
         "INSERT INTO job_history (job_id, old_status, new_status) VALUES (?, ?, ?)",
         (row_id, old_status, new_status),
@@ -323,6 +331,10 @@ def get_stats(conn: sqlite3.Connection) -> dict:
         "SELECT scrape_status, COUNT(*) as c FROM jobs WHERE scrape_status != '' GROUP BY scrape_status"
     ).fetchall()
     stats["scrape"] = {r["scrape_status"]: r["c"] for r in scrape_rows}
+
+    stats["filter_hidden"] = conn.execute(
+        "SELECT COUNT(*) FROM jobs WHERE filter_hidden = 1"
+    ).fetchone()[0]
 
     return stats
 

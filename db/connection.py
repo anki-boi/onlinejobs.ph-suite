@@ -34,6 +34,8 @@ SCHEMA = """
             scrape_status   TEXT    DEFAULT '',
             scrape_reason   TEXT    DEFAULT '',
             status          TEXT    DEFAULT 'New',
+            filter_hidden   INTEGER NOT NULL DEFAULT 0,
+            pre_filter_status TEXT  DEFAULT '',
             date_applied    TEXT    DEFAULT '',
             notes           TEXT    DEFAULT '',
             follow_up       TEXT    DEFAULT '',

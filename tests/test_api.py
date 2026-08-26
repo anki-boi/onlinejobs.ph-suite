@@ -187,6 +187,100 @@ class TestKeywordApply:
         assert res.status_code == 200
         assert res.json()["total_hidden"] == 0  # no description → untouched
 
+    def test_reapply_after_removing_keywords_restores(self, client):
+        """The user's exact scenario: filter hides a job, user changes their
+        mind, removes the keyword, re-applies → job comes back."""
+        self._seed()
+        res = client.post("/api/keywords/apply", json={"positive": [], "negative": ["xero"]})
+        assert res.json()["hidden_by_negative"] == 1
+
+        # Remove the keyword and re-apply (no keywords at all now)
+        res = client.post("/api/keywords/apply", json={"positive": [], "negative": []})
+        assert res.json()["restored"] == 1
+        assert res.json()["total_hidden"] == 0
+
+        from db.connection import get_conn
+        conn = get_conn()
+        row = conn.execute("SELECT status, filter_hidden FROM jobs WHERE job_id=1").fetchone()
+        assert row["status"] == "New" and row["filter_hidden"] == 0
+        conn.close()
+
+    def test_user_hidden_not_auto_restored(self, client):
+        """Jobs the user hid by hand (filter_hidden=0) stay hidden."""
+        from db.connection import get_conn
+        from db.repos import jobs as job_repo
+
+        self._seed()
+        conn = get_conn()
+        row_id = conn.execute("SELECT id FROM jobs WHERE job_id=2").fetchone()[0]
+        job_repo.update_status(conn, row_id, "Hidden")  # manual hide
+        conn.close()
+
+        res = client.post("/api/keywords/apply", json={"positive": ["xero"], "negative": []})
+        # job 2 has no 'xero' — but it's manually hidden, so restore must not touch it
+        assert res.json()["restored"] == 0
+
+        conn = get_conn()
+        assert conn.execute("SELECT status FROM jobs WHERE job_id=2").fetchone()[0] == "Hidden"
+        conn.close()
+
+    def test_manual_restate_not_clobbered(self, client):
+        """Filter hides a job → user sets it to 'Applied' by hand → a later
+        apply with removed keywords must NOT revert it to 'New'."""
+        self._seed()
+        client.post("/api/keywords/apply", json={"positive": [], "negative": ["xero"]})
+
+        from db.connection import get_conn
+        from db.repos import jobs as job_repo
+        conn = get_conn()
+        row_id = conn.execute("SELECT id FROM jobs WHERE job_id=1").fetchone()[0]
+        job_repo.update_status(conn, row_id, "Applied")
+        conn.close()
+
+        res = client.post("/api/keywords/apply", json={"positive": [], "negative": []})
+        assert res.json()["restored"] == 0
+
+        conn = get_conn()
+        row = conn.execute("SELECT status, filter_hidden FROM jobs WHERE job_id=1").fetchone()
+        assert row["status"] == "Applied" and row["filter_hidden"] == 0
+        conn.close()
+
+    def test_rehide_saves_current_status(self, client):
+        """A job the user re-statused can be hidden again by a new filter run;
+        its CURRENT status is what gets saved for a future restore."""
+        self._seed()
+        client.post("/api/keywords/apply", json={"positive": [], "negative": ["xero"]})
+
+        from db.connection import get_conn
+        from db.repos import jobs as job_repo
+        conn = get_conn()
+        row_id = conn.execute("SELECT id FROM jobs WHERE job_id=1").fetchone()[0]
+        job_repo.update_status(conn, row_id, "Applied")
+        conn.close()
+
+        # New filter run: negative 'xero' still matches → hides again, saving 'Applied'
+        res = client.post("/api/keywords/apply", json={"positive": [], "negative": ["xero"]})
+        assert res.json()["hidden_by_negative"] == 1
+
+        conn = get_conn()
+        row = conn.execute("SELECT status, pre_filter_status FROM jobs WHERE job_id=1").fetchone()
+        assert row["status"] == "Hidden" and row["pre_filter_status"] == "Applied"
+        conn.close()
+
+    def test_restore_all_flag(self, client):
+        """The 'Restore' button: brings back everything filter-hidden even if
+        keywords still match."""
+        self._seed()
+        client.post("/api/keywords/apply", json={"positive": [], "negative": ["xero"]})
+        res = client.post("/api/keywords/apply", json={"positive": ["xero"], "negative": ["xero"], "restore": True})
+        assert res.json()["restored"] == 1
+        assert res.json()["total_hidden"] == 0
+
+        from db.connection import get_conn
+        conn = get_conn()
+        assert conn.execute("SELECT status FROM jobs WHERE job_id=1").fetchone()[0] == "New"
+        conn.close()
+
 
 class TestJobDetail:
     def test_found(self, client):

@@ -26,6 +26,7 @@ class CheckRequest(BaseModel):
 class KeywordFilter(BaseModel):
     positive: list[str] = []
     negative: list[str] = []
+    restore: bool = False  # ignore keywords; restore everything hidden by filters
 
 
 # ── Job updates ─────────────────────────────────────────────────────────────

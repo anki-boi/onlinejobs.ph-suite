@@ -40,6 +40,8 @@ def migrate(conn) -> None:
         "scrape_status":   "TEXT DEFAULT ''",
         "scrape_reason":   "TEXT DEFAULT ''",
         "last_checked":    "TEXT",
+        "filter_hidden":   "INTEGER NOT NULL DEFAULT 0",
+        "pre_filter_status": "TEXT DEFAULT ''",
     }
     for col, col_type in new_cols.items():
         if col not in existing:

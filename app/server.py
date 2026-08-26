@@ -383,16 +383,24 @@ def apply_keywords(body: KeywordFilter):
     Apply positive/negative keyword filters to ENRICHED jobs only.
     Positive: hide jobs that DON'T match any positive keyword.
     Negative: hide jobs that DO match any negative keyword.
-    Only touches jobs where description IS NOT NULL.
+
+    Reversible: jobs hidden by this action are tagged (filter_hidden=1) with
+    their previous status. Re-applying with changed/removed keywords restores
+    any filter-hidden job the rules no longer hide. Jobs the user manually
+    hid (or manually re-statused) are never auto-restored.
     """
     positive = [k.strip() for k in body.positive if k.strip()]
     negative = [k.strip() for k in body.negative if k.strip()]
-    if not positive and not negative:
-        return {"hidden_by_negative": 0, "hidden_by_positive": 0, "total_hidden": 0}
+    # Note: applying with NO keywords is not a no-op — it means "no rule hides
+    # anything", so every filter-hidden job is restored. That's the
+    # "I changed my mind" path; the restore flag forces the same outcome
+    # even when keywords are present.
 
     conn = get_db()
     try:
-        neg_hidden, pos_hidden = _apply_keyword_filters(conn, positive, negative)
+        neg_hidden, pos_hidden, restored = _apply_keyword_filters(
+            conn, positive, negative, restore_all=body.restore
+        )
     except sqlite3.OperationalError as exc:
         conn.rollback()
         raise HTTPException(
@@ -402,7 +410,14 @@ def apply_keywords(body: KeywordFilter):
         "hidden_by_negative": neg_hidden,
         "hidden_by_positive": pos_hidden,
         "total_hidden": neg_hidden + pos_hidden,
+        "restored": restored,
+        "still_filter_hidden": _filter_hidden_count(),
     }
+
+
+def _filter_hidden_count() -> int:
+    conn = get_db()
+    return conn.execute("SELECT COUNT(*) FROM jobs WHERE filter_hidden = 1").fetchone()[0]
 
 
 def _get_haystack(row) -> str:
@@ -415,40 +430,91 @@ def _get_haystack(row) -> str:
     ]).lower()
 
 
-def _apply_keyword_filters(conn, positive: list[str], negative: list[str]) -> tuple[int, int]:
+def _apply_keyword_filters(conn, positive: list[str], negative: list[str],
+                           restore_all: bool = False) -> tuple[int, int, int]:
     """Single pass over enriched jobs; batched writes; one commit.
 
-    A negative match hides any non-hidden enriched job (takes precedence).
-    Otherwise, NEW enriched jobs that match no positive keyword are hidden.
-    Returns (hidden_by_negative, hidden_by_positive).
+    Rules per job (enriched only):
+      hide  — matches any negative keyword; or is 'New' (or was 'New' when
+              filter-hidden) and positive keywords are set but none match.
+      keep  — already Hidden: left as-is (user-hidden and filter-hidden both stay).
+      restore — Hidden with filter_hidden=1 that the rules no longer hide goes
+                back to its previous status.
+    A job whose status the user manually changed (not Hidden) has its
+    filter flag cleared and is treated as user-managed.
+    Returns (hidden_by_negative, hidden_by_positive, restored).
     """
     neg_kws = [k.lower() for k in negative]
     pos_kws = [k.lower() for k in positive]
 
     rows = conn.execute(
-        "SELECT id, status, title, description, company, skills FROM jobs "
-        "WHERE status != 'Hidden' AND description IS NOT NULL AND description != ''"
+        "SELECT id, status, filter_hidden, pre_filter_status, title, description, company, skills "
+        "FROM jobs WHERE description IS NOT NULL AND description != ''"
     ).fetchall()
 
-    to_hide: list[tuple[int, str]] = []  # (job id, old status)
-    neg_hidden = pos_hidden = 0
+    to_hide: list[tuple[int, str]] = []    # (id, previous status)
+    to_restore: list[tuple[int, str]] = [] # (id, status to restore)
+    flag_clears: list[int] = []
+    neg_hidden = pos_hidden = restored = 0
+
     for row in rows:
         haystack = _get_haystack(row)
-        if neg_kws and any(k in haystack for k in neg_kws):
-            to_hide.append((row["id"], row["status"]))
-            neg_hidden += 1
-        elif row["status"] == "New" and pos_kws and not any(k in haystack for k in pos_kws):
-            to_hide.append((row["id"], "New"))
-            pos_hidden += 1
+        status = row["status"]
+        is_fh = bool(row["filter_hidden"])
+
+        if restore_all:
+            if status == "Hidden" and is_fh:
+                to_restore.append((row["id"], row["pre_filter_status"] or "New"))
+                restored += 1
+            continue
+
+        neg_match = bool(neg_kws) and any(k in haystack for k in neg_kws)
+        pos_applies = (
+            status == "New"
+            or (status == "Hidden" and is_fh and row["pre_filter_status"] == "New")
+        )
+        pos_match = bool(pos_kws) and any(k in haystack for k in pos_kws)
+        should_hide = neg_match or (pos_applies and bool(pos_kws) and not pos_match)
+
+        if should_hide:
+            if status == "Hidden":
+                continue  # already hidden — user's or filter's, leave it
+            to_hide.append((row["id"], status))
+            if neg_match:
+                neg_hidden += 1
+            else:
+                pos_hidden += 1
+        else:
+            if status == "Hidden" and is_fh:
+                to_restore.append((row["id"], row["pre_filter_status"] or "New"))
+                restored += 1
+            elif is_fh and status != "Hidden":
+                # User manually re-statused a filter-hidden job — stop managing it
+                flag_clears.append(row["id"])
 
     if to_hide:
         conn.executemany(
-            "UPDATE jobs SET status = 'Hidden' WHERE id = ?",
-            [(id,) for id, _ in to_hide],
+            "UPDATE jobs SET status = 'Hidden', filter_hidden = 1, pre_filter_status = ? WHERE id = ?",
+            [(pre, id) for id, pre in to_hide],
         )
         conn.executemany(
             "INSERT INTO job_history (job_id, old_status, new_status) VALUES (?, ?, 'Hidden')",
-            [(id, old) for id, old in to_hide],
+            [(id, pre) for id, pre in to_hide],
         )
+    if to_restore:
+        conn.executemany(
+            "UPDATE jobs SET status = ?, filter_hidden = 0, pre_filter_status = '' WHERE id = ?",
+            [(new_status, id) for id, new_status in to_restore],
+        )
+        conn.executemany(
+            "INSERT INTO job_history (job_id, old_status, new_status) VALUES (?, 'Hidden', ?)",
+            [(id, new_status) for id, new_status in to_restore],
+        )
+    if flag_clears:
+        conn.executemany(
+            "UPDATE jobs SET filter_hidden = 0, pre_filter_status = '' WHERE id = ?",
+            [(id,) for id in flag_clears],
+        )
+    if to_hide or to_restore or flag_clears:
         conn.commit()
-    return neg_hidden, pos_hidden
+    return neg_hidden, pos_hidden, restored

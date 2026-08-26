@@ -341,9 +341,35 @@ async function applyFilters() {
   if (!pos.length && !neg.length) { toast('No filters set','info'); return; }
   try {
     const res = await api('/api/keywords/apply', {method:'POST', body:JSON.stringify({positive:pos, negative:neg})});
-    toast(`Hidden: ${res.total_hidden} (pos:${res.hidden_by_positive} neg:${res.hidden_by_negative})`, 'success');
+    const bits = [`Hidden: ${res.total_hidden}`];
+    if (res.restored) bits.push(`restored: ${res.restored}`);
+    toast(bits.join(' '), 'success');
+    updateFilterHiddenUI(res.still_filter_hidden);
     loadJobs(); loadStats();
   } catch(e) { toast(e.message,'error'); }
+}
+
+async function restoreFilters() {
+  try {
+    const res = await api('/api/keywords/apply', {method:'POST', body:JSON.stringify({positive:[], negative:[], restore:true})});
+    toast(`Restored ${res.restored} job(s) hidden by filters`, 'success');
+    updateFilterHiddenUI(res.still_filter_hidden);
+    loadJobs(); loadStats();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+function updateFilterHiddenUI(n) {
+  const hint = $('#filter-hidden-hint');
+  const btn = $('#btn-restore-filters');
+  if (n > 0) {
+    hint.style.display = '';
+    hint.textContent = `${n} job(s) hidden by filters — remove keywords above and re-apply (or use the button) to bring them back. Jobs you hid manually are never auto-restored.`;
+    btn.style.display = '';
+    btn.textContent = `Restore jobs hidden by filters (${n})`;
+  } else {
+    hint.style.display = 'none';
+    btn.style.display = 'none';
+  }
 }
 
 // ── Chip management ─────────────────────────────────────────────────────────
@@ -438,6 +464,7 @@ function init() {
 
   // Apply filters
   $('#btn-apply-filters').addEventListener('click', applyFilters);
+  $('#btn-restore-filters').addEventListener('click', restoreFilters);
 
   // Harvest
   $('#btn-harvest').addEventListener('click', runPipeline);

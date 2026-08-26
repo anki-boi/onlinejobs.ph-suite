@@ -35,7 +35,7 @@ class TestSchema:
             "salary", "location", "hours_per_week", "work_type",
             "posted_date", "date_updated", "skills", "employer_id",
             "search_keyword", "search_category", "scrape_status", "scrape_reason",
-            "status", "date_applied", "notes", "follow_up",
+            "status", "filter_hidden", "pre_filter_status", "date_applied", "notes", "follow_up",
             "date_found", "last_checked",
         ]:
             assert expected in cols, f"Missing column: {expected}"
