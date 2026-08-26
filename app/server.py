@@ -88,6 +88,7 @@ def list_jobs(
     location: str | None = None,
     hours: str | None = None,
     posted: str | None = None,
+    has_salary: bool = False,
 ):
     conn = get_db()
     rows, total = job_repo.get_jobs(
@@ -97,6 +98,7 @@ def list_jobs(
         scrape_status=scrape_status, sort=sort, order=order,
         title=title, company=company, salary=salary,
         location=location, hours=hours, posted=posted,
+        has_salary=has_salary,
     )
     return {"jobs": [dict(r) for r in rows], "total": total, "page": page, "per_page": per_page}
 

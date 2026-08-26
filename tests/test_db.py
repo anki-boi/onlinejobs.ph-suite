@@ -177,6 +177,20 @@ class TestJobRepos:
         rows, total = job_repo.get_jobs(conn, location="Remote", company="acme")
         assert total == 1  # AND across different columns
 
+    def test_get_jobs_has_salary(self, conn):
+        job_repo.upsert_stub(conn, job_id=1, job_url="http://1", title="A", salary="$500/month")
+        job_repo.upsert_stub(conn, job_id=2, job_url="http://2", title="B", salary="TBD")
+        job_repo.upsert_stub(conn, job_id=3, job_url="http://3", title="C", salary="Negotiable")
+        job_repo.upsert_stub(conn, job_id=4, job_url="http://4", title="D")  # no salary at all
+
+        rows, total = job_repo.get_jobs(conn, has_salary=True)
+        assert total == 1
+        assert rows[0]["job_id"] == 1
+
+        # default returns everything
+        rows, total = job_repo.get_jobs(conn)
+        assert total == 4
+
     def test_get_jobs_scrape_status_multi(self, conn):
         r1, _ = job_repo.upsert_stub(conn, job_id=1, job_url="http://1", title="A")
         r2, _ = job_repo.upsert_stub(conn, job_id=2, job_url="http://2", title="B")

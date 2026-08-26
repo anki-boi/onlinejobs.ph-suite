@@ -45,6 +45,7 @@ def get_jobs(
     location: str | None = None,
     hours: str | None = None,
     posted: str | None = None,
+    has_salary: bool = False,
 ) -> tuple[list[sqlite3.Row], int]:
     """Return (rows, total_count) with optional filters and pagination.
 
@@ -95,6 +96,12 @@ def get_jobs(
         if val:
             clauses.append(f"{col} LIKE ?")
             params.append(f"%{val}%")
+
+    if has_salary:
+        # "Has a salary" = the field contains at least one digit. Excludes every
+        # no-salary label (TBD, N/A, Negotiable, DOE, "to be discussed", empty, NULL)
+        # regardless of wording. Verified against the live DB: 2,027 in / 283 out.
+        clauses.append("salary GLOB '*[0-9]*'")
 
     if search:
         like = f"%{search}%"

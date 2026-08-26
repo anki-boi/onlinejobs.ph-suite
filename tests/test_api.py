@@ -123,6 +123,24 @@ class TestJobsList:
         data = client.get("/api/jobs?sort=nonexistent").json()
         assert data["total"] == 3
 
+    def test_has_salary_param(self, client):
+        from db.connection import get_conn
+        from db.repos import jobs as job_repo
+
+        conn = get_conn()
+        job_repo.upsert_stub(conn, job_id=1, job_url="http://test.com/1", title="A", salary="$500/month")
+        job_repo.upsert_stub(conn, job_id=2, job_url="http://test.com/2", title="B", salary="TBD")
+        job_repo.upsert_stub(conn, job_id=3, job_url="http://test.com/3", title="C")  # no salary
+        conn.close()
+
+        data = client.get("/api/jobs?has_salary=1").json()
+        assert data["total"] == 1
+        assert data["jobs"][0]["job_id"] == 1
+
+        # default = all
+        data = client.get("/api/jobs").json()
+        assert data["total"] == 3
+
 
 class TestKeywordApply:
     def _seed(self):
