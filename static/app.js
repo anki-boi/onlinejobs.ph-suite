@@ -13,8 +13,10 @@ const state = {
   scraping: false,
   // Excel-style column controls
   sort: '', order: 'desc',
+  hasSalaryOnly: false,   // "With salary" toggle (toolbar + Salary ▼ share this one state)
+  stats: null,            // last /api/stats payload, feeds the next-step hint
   colFilters: { status: [], work_type: [], scrape: [],
-                title: '', company: '', posted: '', salary: '', location: '', hours: '' },
+                title: '', company: '', posted: '', salary: '', hours: '' },
 };
 
 // Known values for checkbox-style column filters
@@ -64,7 +66,28 @@ async function loadStats() {
       <div class="stat-pill interviewing"><span class="stat-num">${s['Interviewing']||0}</span> Interview</div>
       <div class="stat-pill hired"><span class="stat-num">${s['Hired']||0}</span> Hired</div>
       <div class="stat-pill"><span class="stat-num">${s.total||0}</span> Total</div>`;
+    state.stats = s;
+    updateNextHint();
   } catch(e) {}
+}
+
+// Contextual "what to do next" hint — keeps the main loop visible at a glance
+function updateNextHint() {
+  const el = $('#next-hint');
+  if (!el) return;
+  let msg = '';
+  if (state.scraping) {
+    msg = 'Working — new jobs land in the table as they\'re found. Watch the activity feed.';
+  } else if (!state.stats || !state.stats.total) {
+    msg = 'Start here: set a scope in "Find new jobs" and hit Scrape.';
+  } else if (state.total === 0) {
+    msg = 'Nothing matches this view — loosen a filter (or tick "Show hidden"), or run another scrape.';
+  } else if ((state.stats['New']||0) > 0) {
+    const n = state.stats['New'];
+    msg = `${n} new job${n>1?'s':''} to review — click a row to open it, then set its status.`;
+  }
+  if (msg) { el.textContent = msg; el.style.display = ''; }
+  else el.style.display = 'none';
 }
 
 // ── Jobs table ──────────────────────────────────────────────────────────────
@@ -78,39 +101,47 @@ async function loadJobs() {
   if (state.skills.length) p.set('skills', state.skills.join(','));
   if (state.colFilters.work_type.length) p.set('work_type', state.colFilters.work_type.join(','));
   if (state.colFilters.scrape.length) p.set('scrape_status', state.colFilters.scrape.join(','));
-  for (const k of ['title','company','posted','salary','location','hours'])
+  for (const k of ['title','company','posted','salary','hours'])
     if (state.colFilters[k]) p.set(k, state.colFilters[k]);
+  if (state.hasSalaryOnly) p.set('has_salary','1');
   if (state.sort) { p.set('sort', state.sort); p.set('order', state.order); }
   try {
     const data = await api(`/api/jobs?${p}`);
     renderJobs(data.jobs);
     state.total = data.total;
     applyVisibleFilter();
+    updateNextHint();
   } catch(e) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="7">${esc(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="8">${esc(e.message)}</td></tr>`;
   }
 }
 
 function jobRowHtml(j) {
   const dot = j.scrape_status==='Open'?'open':j.scrape_status==='Closed'?'closed':'unk';
+  const dotTitle = j.scrape_status ? `Job is ${j.scrape_status} on OJ.ph` : 'Not checked yet';
   const wt = j.work_type ? j.work_type.split(' ')[0] : '';
   const wtCls = j.work_type ? j.work_type.replace(/ /g,'') : '';
   const skillsHtml = j.skills ? j.skills.split(',').slice(0,3).map(s=>`<span class="skill-tag">${esc(s.trim())}</span>`).join('') : '';
+  // Two kinds of hidden: yours (solid) vs keyword auto-hide (dashed, remembers what it was)
+  const badge = j.status === 'Hidden'
+    ? (j.filter_hidden
+        ? `<span class="status-badge status-Hidden hidden-by-filter" title="Auto-hidden by keyword rules — was ${esc(j.pre_filter_status||'New')}">Hidden · auto</span>`
+        : `<span class="status-badge status-Hidden" title="Hidden by you">Hidden</span>`)
+    : `<span class="status-badge status-${j.status}">${j.status}</span>`;
   return `<tr data-id="${j.id}" class="${j.status==='Hidden'?'hidden-row':''}">
-    <td><span class="scrape-dot ${dot}"></span></td>
-    <td><span class="status-badge status-${j.status}">${j.status}</span></td>
+    <td><span class="scrape-dot ${dot}" title="${dotTitle}"></span></td>
+    <td>${badge}</td>
     <td><div class="cell-title">${esc(j.title)||'<em class="text-muted">untitled</em>'}</div>${skillsHtml?`<div class="mt-1">${skillsHtml}</div>`:''}</td>
     <td class="cell-mono">${esc(j.company||'')}</td>
     <td class="cell-date">${fmtDate(j.posted_date)||fmtDate(j.date_found)}</td>
     <td><span class="work-type ${wtCls}">${wt}</span></td>
-    <td class="cell-mono">${esc(j.salary||'')}</td>
-    <td>${esc(j.location||'')}</td>
+    <td class="cell-mono">${esc(j.salary||'')||'<span class="text-muted">—</span>'}</td>
     <td class="cell-mono">${esc(j.hours_per_week||'')}</td>
   </tr>`;
 }
 
 function renderJobs(jobs) {
-  if (!jobs.length) { tbody.innerHTML='<tr class="empty-row"><td colspan="9">No jobs yet — run a scrape</td></tr>'; return; }
+  if (!jobs.length) { tbody.innerHTML='<tr class="empty-row"><td colspan="8">No jobs here — run a scrape, or loosen a filter above.</td></tr>'; return; }
   tbody.innerHTML = jobs.map(jobRowHtml).join('');
 }
 
@@ -128,7 +159,6 @@ function insertStubRow(d) {
     posted_date: d.posted_date,
     salary: d.salary,
     skills: d.skills,
-    location: d.location || null,
     hours_per_week: d.hours || null,
     status: 'New',
     scrape_status: 'Open',
@@ -215,6 +245,11 @@ async function openDetail(id) {
     $('#detail-status').className = `status-badge status-${j.status}`;
     $('#detail-work-type').textContent = j.work_type||'';
     $('#detail-work-type').className = `work-type ${(j.work_type||'').replace(/ /g,'')}`;
+    const hn = $('#detail-hidden-note');
+    if (j.status === 'Hidden' && j.filter_hidden) {
+      hn.textContent = `Auto-hidden by your keyword rules — it was "${j.pre_filter_status||'New'}" before. Restore it from the Auto-hide panel on the left.`;
+      hn.style.display = '';
+    } else hn.style.display = 'none';
     $('#detail-salary').textContent = j.salary||'\u2014';
     $('#detail-hours').textContent = j.hours_per_week||'\u2014';
     $('#detail-posted').textContent = j.posted_date||'';
@@ -307,6 +342,7 @@ function setScraping(on) {
   $('#btn-stop').disabled = !on;
   $('#harvest-label').textContent = on?'Scraping...':'Scrape jobs';
   $('#check-label').textContent = on?'Checking...':'Check for updates';
+  updateNextHint();
 }
 
 // ── Actions ─────────────────────────────────────────────────────────────────
@@ -363,9 +399,9 @@ function updateFilterHiddenUI(n) {
   const btn = $('#btn-restore-filters');
   if (n > 0) {
     hint.style.display = '';
-    hint.textContent = `${n} job(s) hidden by filters — remove keywords above and re-apply (or use the button) to bring them back. Jobs you hid manually are never auto-restored.`;
+    hint.textContent = `${n} job(s) auto-hidden by these keywords — change or remove keywords and re-apply (or use the button) to bring them back. Jobs you hid yourself are never auto-restored.`;
     btn.style.display = '';
-    btn.textContent = `Restore jobs hidden by filters (${n})`;
+    btn.textContent = `Restore auto-hidden jobs (${n})`;
   } else {
     hint.style.display = 'none';
     btn.style.display = 'none';
@@ -477,8 +513,20 @@ function init() {
   // Toolbar
   let st;
   $('#search-box').addEventListener('input', e=>{ clearTimeout(st); st=setTimeout(()=>{state.search=e.target.value.trim();loadJobs();},300); });
-  $('#filter-status').addEventListener('change', e=>{state.status=e.target.value; state.colFilters.status=[]; updateFunnelIndicators(); loadJobs();});
+  $('#filter-status').addEventListener('change', e=>{
+    state.status = e.target.value;
+    state.colFilters.status = [];
+    // Picking "Hidden" while "Show hidden" is off would show nothing — enable it
+    if (e.target.value === 'Hidden') { state.includeHidden = true; $('#filter-hidden').checked = true; }
+    updateFunnelIndicators();
+    loadJobs();
+  });
   $('#filter-hidden').addEventListener('change', e=>{state.includeHidden=e.target.checked;loadJobs();});
+  $('#filter-has-salary').addEventListener('change', e=>{
+    state.hasSalaryOnly = e.target.checked;
+    updateFunnelIndicators();
+    loadJobs();
+  });
 
   // ── Excel-style column headers: click = sort, ▼ = filter ─────────────────
   document.querySelectorAll('th.sortable').forEach(th => {
@@ -518,9 +566,14 @@ function updateSortIndicators() {
 
 function updateFunnelIndicators() {
   document.querySelectorAll('.th-funnel').forEach(fn => {
-    const v = state.colFilters[fn.dataset.filter];
-    const active = Array.isArray(v) ? v.length > 0 : !!v;
-    fn.classList.toggle('active', active);
+    const k = fn.dataset.filter;
+    if (k === 'salary') {
+      fn.classList.toggle('active', state.hasSalaryOnly || !!state.colFilters.salary);
+    } else {
+      const v = state.colFilters[k];
+      const active = Array.isArray(v) ? v.length > 0 : !!v;
+      fn.classList.toggle('active', active);
+    }
   });
 }
 
@@ -546,6 +599,14 @@ function openColFilter(col, th) {
       <div class="fp-list">${values.map(v =>
         `<label class="checkbox-label"><input type="checkbox" value="${esc(v)}" ${current.includes(v)?'checked':''}> ${esc(v)}</label>`).join('')}</div>
       <div class="fp-actions"><button class="btn btn-ghost btn-sm fp-clear">Clear</button><button class="btn btn-primary btn-sm fp-ok">OK</button></div>`;
+  } else if (col === 'salary') {
+    filterPop.innerHTML = `
+      <div class="fp-title">Salary</div>
+      <label class="checkbox-label" style="margin-bottom:2px"><input type="checkbox" class="fp-has-salary" ${state.hasSalaryOnly?'checked':''}> With salary only</label>
+      <p class="panel-hint" style="margin:0 0 8px 22px">Hides jobs with no amount (TBD, N/A, Negotiable, …).</p>
+      <div class="fp-title" style="margin-top:6px">Contains…</div>
+      <input type="text" class="input input-sm fp-text" placeholder="Type to filter" value="${esc(current)}" style="width:100%;margin-bottom:8px">
+      <div class="fp-actions"><button class="btn btn-ghost btn-sm fp-clear">Clear</button><button class="btn btn-primary btn-sm fp-ok">OK</button></div>`;
   } else {
     filterPop.innerHTML = `
       <div class="fp-title">Contains…</div>
@@ -560,11 +621,18 @@ function openColFilter(col, th) {
 
   filterPop.querySelector('.fp-clear').onclick = () => {
     if (values) filterPop.querySelectorAll('input').forEach(i => i.checked = false);
-    else filterPop.querySelector('.fp-text').value = '';
+    else {
+      const t = filterPop.querySelector('.fp-text'); if (t) t.value = '';
+      const h = filterPop.querySelector('.fp-has-salary'); if (h) h.checked = false;
+    }
   };
   filterPop.querySelector('.fp-ok').onclick = () => {
     if (values) state.colFilters[col] = [...filterPop.querySelectorAll('input:checked')].map(i => i.value);
-    else state.colFilters[col] = filterPop.querySelector('.fp-text').value.trim();
+    else state.colFilters[col] = (filterPop.querySelector('.fp-text')?.value || '').trim();
+    if (col === 'salary') {
+      state.hasSalaryOnly = !!filterPop.querySelector('.fp-has-salary')?.checked;
+      $('#filter-has-salary').checked = state.hasSalaryOnly; // keep the toolbar toggle in sync
+    }
     if (col === 'status') { state.status = ''; $('#filter-status').value = ''; }
     updateFunnelIndicators();
     closeColFilter();

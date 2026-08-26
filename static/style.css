@@ -79,12 +79,6 @@ header {
   font-size: 0.78rem; font-weight: 700;
   letter-spacing: 0.06em; text-transform: uppercase; color: var(--text);
 }
-.step-badge {
-  font-family: var(--mono); font-size: 0.65rem; font-weight: 500;
-  color: var(--accent); background: var(--accent-dim);
-  border: 1px solid rgba(212,165,99,0.3);
-  padding: 1px 5px; border-radius: 3px;
-}
 .panel-hint { font-size: 0.74rem; color: var(--text3); margin-bottom: 8px; line-height: 1.4; }
 
 /* ── Form elements ── */
@@ -228,7 +222,6 @@ header {
 .col-type    { width: 80px; }
 .col-salary  { width: 110px; }
 .col-source  { width: 100px; }
-.col-location { width: 100px; }
 .col-hours    { width: 70px; }
 .col-actions  { width: 60px; }
 
@@ -288,6 +281,7 @@ th.sorted-desc .th-label::after { content: '▼'; }
 .status-Hired       { background: var(--green);      color: #1a1410;       border: 1px solid var(--green); }
 .status-Rejected    { background: var(--red-dim);    color: var(--red);    border: 1px solid rgba(196,122,106,0.3); }
 .status-Hidden      { background: var(--bg4);        color: var(--text3);  border: 1px solid var(--border2); }
+.status-Hidden.hidden-by-filter { border-style: dashed; border-color: rgba(122,158,196,0.45); }
 
 /* ── Work type badges ── */
 .work-type { font-size: 0.7rem; font-family: var(--mono); }
@@ -337,6 +331,12 @@ th.sorted-desc .th-label::after { content: '▼'; }
 .detail-company { font-size: 0.82rem; color: var(--accent); font-weight: 500; }
 
 .detail-body { padding: 16px 20px; }
+
+.detail-hidden-note {
+  padding: 8px 10px; margin-bottom: 14px;
+  background: var(--blue-dim); border: 1px dashed rgba(122,158,196,0.45);
+  border-radius: var(--radius); color: var(--blue); font-size: 0.78rem; line-height: 1.4;
+}
 
 .detail-section { margin-bottom: 18px; }
 .detail-section h3 {
@@ -407,6 +407,12 @@ th.sorted-desc .th-label::after { content: '▼'; }
 .status-select:focus { border-color: var(--accent); }
 
 /* ── No pagination: full scrollable table ── */
+.next-hint {
+  padding: 7px 16px; font-size: 0.76rem; color: var(--text2);
+  background: var(--bg2); border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.next-hint::before { content: '→ '; color: var(--accent); font-weight: 700; }
 .filter-banner {
   padding: 6px 16px; font-size: 0.78rem; font-family: var(--mono);
   background: var(--accent-dim); border-bottom: 1px solid rgba(212,165,99,0.3);

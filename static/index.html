@@ -22,13 +22,12 @@
   <!-- ═══ Sidebar ═══ -->
   <aside class="sidebar">
 
-    <!-- Panel 1: Search Scope -->
+    <!-- Panel: Find new jobs (scrape scope) -->
     <div class="panel">
       <div class="panel-header">
-        <h2>Search</h2>
-        <span class="step-badge">1</span>
+        <h2>Find new jobs</h2>
       </div>
-      <p class="panel-hint">Keywords to search for on OJ.ph. Combine with categories/skills below to narrow scope.</p>
+      <p class="panel-hint">Scope what the scraper looks for on OJ.ph, then hit <b>Scrape</b>. New jobs appear in the table below as they're found.</p>
 
       <label class="field-label">Keywords</label>
       <div class="keyword-input-wrap">
@@ -39,15 +38,15 @@
 
       <div class="divider"></div>
 
-      <label class="field-label">Categories (OR)</label>
-      <p class="panel-hint" style="margin-bottom:4px">Limit search to these categories. Empty = all.</p>
+      <label class="field-label">Categories</label>
+      <p class="panel-hint" style="margin-bottom:4px">Limit search to these categories. None = all.</p>
       <input type="text" id="cat-search" class="input input-sm" placeholder="Filter…" style="width:100%;margin-bottom:6px">
       <div class="check-list" id="cat-list"></div>
 
       <div class="divider"></div>
 
-      <label class="field-label">Skills (OR)</label>
-      <p class="panel-hint" style="margin-bottom:4px">Only show jobs with these skills. Empty = all.</p>
+      <label class="field-label">Skills</label>
+      <p class="panel-hint" style="margin-bottom:4px">Only scrape jobs tagged with these. None = all.</p>
       <input type="text" id="skill-search" class="input" placeholder="Filter…" style="width:100%;margin-bottom:6px">
       <div class="check-list" id="skill-list"></div>
 
@@ -56,15 +55,15 @@
       </button>
     </div>
 
-    <!-- Panel 2: Keyword Filters (post-enrichment) -->
+    <!-- Panel: Auto-hide by keywords (hides jobs; restorable) -->
     <div class="panel">
       <div class="panel-header">
-        <h2>Filters</h2>
-        <span class="step-badge">2</span>
+        <h2>Auto-hide by keywords</h2>
       </div>
-      <p class="panel-hint">Applied to enriched jobs only. Uses the full job description text.</p>
+      <p class="panel-hint">Scans each job's full description and <b>hides</b> matches from your list — restorable, never deleted. Jobs you hide yourself are never touched.</p>
 
-      <label class="field-label" style="color:var(--green)">Keep if matches (positive)</label>
+      <label class="field-label" style="color:var(--green)">Keep — must mention</label>
+      <p class="panel-hint" style="margin-bottom:4px">New jobs that mention <i>none</i> of these get hidden.</p>
       <div class="keyword-input-wrap">
         <input type="text" id="pos-input" class="input" placeholder="e.g. remote, USA" autocomplete="off">
         <button class="btn-tag-add" id="pos-add">+</button>
@@ -73,36 +72,36 @@
 
       <div class="divider"></div>
 
-      <label class="field-label" style="color:var(--red)">Hide if matches (negative)</label>
+      <label class="field-label" style="color:var(--red)">Remove — must not mention</label>
+      <p class="panel-hint" style="margin-bottom:4px">Any job mentioning one of these gets hidden.</p>
       <div class="keyword-input-wrap">
         <input type="text" id="neg-input" class="input" placeholder="e.g. insurance, crypto" autocomplete="off">
         <button class="btn-tag-add" id="neg-add">+</button>
       </div>
       <div class="keyword-chips" id="neg-chips"></div>
 
-      <button class="btn btn-outline mt-2" id="btn-apply-filters">Apply filters</button>
+      <button class="btn btn-outline mt-2" id="btn-apply-filters">Apply auto-hide</button>
       <p class="panel-hint mt-2" id="filter-hidden-hint" style="display:none"></p>
-      <button class="btn btn-ghost mt-1" id="btn-restore-filters" style="display:none">Restore jobs hidden by filters</button>
+      <button class="btn btn-ghost mt-1" id="btn-restore-filters" style="display:none">Restore auto-hidden jobs</button>
     </div>
 
-    <!-- Panel 3: Check Statuses -->
+    <!-- Panel: Re-check jobs -->
     <div class="panel">
       <div class="panel-header">
-        <h2>Check</h2>
-        <span class="step-badge">3</span>
+        <h2>Re-check jobs</h2>
       </div>
-      <p class="panel-hint">Re-check jobs for closure/updates.</p>
+      <p class="panel-hint">Re-visits jobs to catch closures and updates (salary, skills, description).</p>
       <label class="checkbox-label mb-2">
-        <input type="checkbox" id="check-all"> Re-check all
+        <input type="checkbox" id="check-all"> Include all jobs (not just New/Interested)
       </label>
       <button class="btn btn-outline" id="btn-check">
         <span id="check-label">Check for updates</span>
       </button>
     </div>
 
-    <!-- Panel 4: Controls -->
+    <!-- Stop control -->
     <div class="panel">
-      <button class="btn btn-danger" id="btn-stop" disabled>Stop</button>
+      <button class="btn btn-danger" id="btn-stop" disabled>Stop current run</button>
     </div>
 
   </aside>
@@ -120,15 +119,18 @@
 
     <div class="toolbar">
       <div class="toolbar-left">
-        <input type="text" id="search-box" class="input search-input" placeholder="Search..." autocomplete="off">
-        <select class="select" id="filter-status">
-          <option value="">All</option>
+        <input type="text" id="search-box" class="input search-input" placeholder="Search title, company, description…" autocomplete="off">
+        <select class="select" id="filter-status" title="Workflow status">
+          <option value="">All statuses</option>
           <option>New</option><option>Interested</option><option>Applied</option>
           <option>Interviewing</option><option>Offer</option><option>Hired</option>
           <option>Rejected</option><option>Hidden</option>
         </select>
-        <label class="checkbox-label">
-          <input type="checkbox" id="filter-hidden"> Hidden
+        <label class="checkbox-label" title="Only show jobs that list an actual salary amount (hides TBD / Negotiable / none)">
+          <input type="checkbox" id="filter-has-salary"> With salary
+        </label>
+        <label class="checkbox-label" title="Include jobs hidden manually or by keyword auto-hide">
+          <input type="checkbox" id="filter-hidden"> Show hidden
         </label>
       </div>
       <div class="toolbar-right">
@@ -136,6 +138,7 @@
         <button class="btn btn-outline btn-sm" id="btn-export">CSV</button>
       </div>
     </div>
+    <div class="next-hint" id="next-hint" style="display:none"></div>
 
     <div class="table-wrap">
       <table class="jobs-table">
@@ -148,12 +151,11 @@
             <th class="sortable col-posted" data-col="posted_date"><span class="th-in"><span class="th-label">Posted</span><span class="th-funnel" data-filter="posted" title="Filter">▼</span></span></th>
             <th class="sortable col-type" data-col="work_type"><span class="th-in"><span class="th-label">Type</span><span class="th-funnel" data-filter="work_type" title="Filter">▼</span></span></th>
             <th class="sortable col-salary" data-col="salary"><span class="th-in"><span class="th-label">Salary</span><span class="th-funnel" data-filter="salary" title="Filter">▼</span></span></th>
-            <th class="sortable col-location" data-col="location"><span class="th-in"><span class="th-label">Location</span><span class="th-funnel" data-filter="location" title="Filter">▼</span></span></th>
             <th class="sortable col-hours" data-col="hours_per_week"><span class="th-in"><span class="th-label">Hours</span><span class="th-funnel" data-filter="hours" title="Filter">▼</span></span></th>
           </tr>
         </thead>
         <tbody id="jobs-tbody">
-          <tr class="empty-row"><td colspan="9">Loading...</td></tr>
+          <tr class="empty-row"><td colspan="8">Loading...</td></tr>
         </tbody>
       </table>
     </div>
@@ -178,6 +180,7 @@
   </div>
 
   <div class="detail-body">
+    <div class="detail-hidden-note" id="detail-hidden-note"></div>
     <!-- Key facts grid -->
     <div class="detail-section">
       <div class="detail-grid">
