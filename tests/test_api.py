@@ -84,6 +84,109 @@ class TestJobsList:
         assert data["total"] == 1
         assert data["jobs"][0]["title"] == "Job A"
 
+    def test_skills_or_param(self, client):
+        from db.connection import get_conn
+        from db.repos import jobs as job_repo
+
+        conn = get_conn()
+        job_repo.upsert_stub(conn, job_id=1, job_url="http://test.com/1", title="Job A",
+                             skills=["Video Editing", "Audio Editing"])
+        job_repo.upsert_stub(conn, job_id=2, job_url="http://test.com/2", title="Job B",
+                             skills=["Quickbooks"])
+        job_repo.upsert_stub(conn, job_id=3, job_url="http://test.com/3", title="Job C",
+                             skills=["Marketing"])
+        conn.close()
+
+        res = client.get("/api/jobs?skills=Quickbooks,Audio%20Editing&per_page=99999")
+        data = res.json()
+        # OR across the whole table, not just one page
+        assert data["total"] == 2
+        assert {j["job_id"] for j in data["jobs"]} == {1, 2}
+
+    def test_sort_param(self, client):
+        from db.connection import get_conn
+        from db.repos import jobs as job_repo
+
+        conn = get_conn()
+        job_repo.upsert_stub(conn, job_id=1, job_url="http://test.com/1", title="C job")
+        job_repo.upsert_stub(conn, job_id=2, job_url="http://test.com/2", title="A job")
+        job_repo.upsert_stub(conn, job_id=3, job_url="http://test.com/3", title="B job")
+        conn.close()
+
+        data = client.get("/api/jobs?sort=title&order=asc").json()
+        assert [j["title"] for j in data["jobs"]] == ["A job", "B job", "C job"]
+
+        data = client.get("/api/jobs?sort=title&order=desc").json()
+        assert [j["title"] for j in data["jobs"]] == ["C job", "B job", "A job"]
+
+        # unknown sort falls back to default ordering, no error
+        data = client.get("/api/jobs?sort=nonexistent").json()
+        assert data["total"] == 3
+
+
+class TestKeywordApply:
+    def _seed(self):
+        from db.connection import get_conn
+        from db.repos import jobs as job_repo
+
+        conn = get_conn()
+        job_repo.upsert_stub(conn, job_id=1, job_url="http://test.com/1",
+                             title="Bookkeeper", company="Xero Co")
+        job_repo.upsert_stub(conn, job_id=2, job_url="http://test.com/2",
+                             title="Video Editor", company="Globex")
+        conn.execute("UPDATE jobs SET description=? WHERE job_id=1",
+                     ("We love Xero and Quickbooks.",))
+        conn.execute("UPDATE jobs SET description=? WHERE job_id=2",
+                     ("Cut videos all day.",))
+        conn.commit()
+        conn.close()
+
+    def test_no_keywords_noop(self, client):
+        self._seed()
+        res = client.post("/api/keywords/apply", json={"positive": [], "negative": []})
+        assert res.status_code == 200
+        assert res.json()["total_hidden"] == 0
+
+    def test_negative_hides_matching(self, client):
+        self._seed()
+        res = client.post("/api/keywords/apply", json={"positive": [], "negative": ["xero"]})
+        assert res.status_code == 200
+        assert res.json()["hidden_by_negative"] == 1
+
+        from db.connection import get_conn
+        conn = get_conn()
+        assert conn.execute("SELECT status FROM jobs WHERE job_id=1").fetchone()[0] == "Hidden"
+        assert conn.execute("SELECT status FROM jobs WHERE job_id=2").fetchone()[0] == "New"
+        hist = conn.execute(
+            "SELECT old_status FROM job_history WHERE new_status='Hidden' AND job_id=1"
+        ).fetchall()
+        assert len(hist) == 1 and hist[0][0] == "New"
+        conn.close()
+
+    def test_positive_hides_nonmatching_new(self, client):
+        self._seed()
+        res = client.post("/api/keywords/apply", json={"positive": ["xero"], "negative": []})
+        assert res.status_code == 200
+        assert res.json()["hidden_by_positive"] == 1  # only the video editor
+
+        from db.connection import get_conn
+        conn = get_conn()
+        assert conn.execute("SELECT status FROM jobs WHERE job_id=1").fetchone()[0] == "New"
+        assert conn.execute("SELECT status FROM jobs WHERE job_id=2").fetchone()[0] == "Hidden"
+        conn.close()
+
+    def test_unenriched_untouched(self, client):
+        from db.connection import get_conn
+        from db.repos import jobs as job_repo
+
+        conn = get_conn()
+        job_repo.upsert_stub(conn, job_id=9, job_url="http://test.com/9", title="Stub Only")
+        conn.close()
+
+        res = client.post("/api/keywords/apply", json={"positive": ["xero"], "negative": []})
+        assert res.status_code == 200
+        assert res.json()["total_hidden"] == 0  # no description → untouched
+
 
 class TestJobDetail:
     def test_found(self, client):

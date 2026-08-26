@@ -76,9 +76,14 @@ DB_PATH = BASE_DIR / _config.get("db_path", "jobs.db")
 
 
 def get_conn(db_path: str | Path | None = None) -> sqlite3.Connection:
-    """Open a new SQLite connection with row factory."""
+    """Open a new SQLite connection with row factory.
+
+    `timeout=30` sets the busy-wait: a locked DB (e.g. a pipeline writing)
+    makes callers wait up to 30s instead of failing instantly with
+    `database is locked`.
+    """
     path = str(db_path or DB_PATH)
-    conn = sqlite3.connect(path, check_same_thread=False)
+    conn = sqlite3.connect(path, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")

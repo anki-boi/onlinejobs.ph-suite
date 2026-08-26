@@ -121,6 +121,75 @@ class TestJobRepos:
         rows, total = job_repo.get_jobs(conn, include_hidden=True)
         assert total == 2
 
+    def test_get_jobs_skills_or_filter(self, conn):
+        job_repo.upsert_stub(conn, job_id=1, job_url="http://1", title="A", skills=["Video Editing", "Audio Editing"])
+        job_repo.upsert_stub(conn, job_id=2, job_url="http://2", title="B", skills=["Accounting", "Quickbooks"])
+        job_repo.upsert_stub(conn, job_id=3, job_url="http://3", title="C", skills=["Marketing"])
+
+        # OR logic: matches job 1 (Audio) and job 2 (Quickbooks), not job 3
+        rows, total = job_repo.get_jobs(conn, skills="Quickbooks, Audio Editing")
+        assert total == 2
+        assert {r["job_id"] for r in rows} == {1, 2}
+
+        # single skill still works through the same param
+        rows, total = job_repo.get_jobs(conn, skills="Xero")
+        assert total == 0
+
+    def test_get_jobs_work_type_multi(self, conn):
+        job_repo.upsert_stub(conn, job_id=1, job_url="http://1", title="A", work_type="Part Time")
+        job_repo.upsert_stub(conn, job_id=2, job_url="http://2", title="B", work_type="Full Time")
+        job_repo.upsert_stub(conn, job_id=3, job_url="http://3", title="C", work_type="Gig")
+
+        rows, total = job_repo.get_jobs(conn, work_type="Part Time, Gig")
+        assert total == 2
+        assert {r["job_id"] for r in rows} == {1, 3}
+
+    def test_get_jobs_sort(self, conn):
+        job_repo.upsert_stub(conn, job_id=1, job_url="http://1", title="C job", posted_date="2026-08-01 10:00:00")
+        job_repo.upsert_stub(conn, job_id=2, job_url="http://2", title="A job", posted_date="2026-08-03 10:00:00")
+        job_repo.upsert_stub(conn, job_id=3, job_url="http://3", title="B job", posted_date="2026-08-02 10:00:00")
+
+        rows, _ = job_repo.get_jobs(conn, sort="title", order="asc")
+        assert [r["title"] for r in rows] == ["A job", "B job", "C job"]
+
+        rows, _ = job_repo.get_jobs(conn, sort="title", order="desc")
+        assert [r["title"] for r in rows] == ["C job", "B job", "A job"]
+
+        rows, _ = job_repo.get_jobs(conn, sort="posted_date", order="asc")
+        assert [r["job_id"] for r in rows] == [1, 3, 2]
+
+        # unknown sort falls back to newest-first default (all same date_found → id desc)
+        rows, _ = job_repo.get_jobs(conn, sort="password")
+        assert [r["job_id"] for r in rows] == [3, 2, 1]
+
+    def test_get_jobs_text_filters(self, conn):
+        job_repo.upsert_stub(conn, job_id=1, job_url="http://1", title="Bookkeeper Needed",
+                             company="Acme Corp", salary="$500/month", location="Remote")
+        job_repo.upsert_stub(conn, job_id=2, job_url="http://2", title="Editor",
+                             company="Globex", salary="$300/month", location="On-site")
+
+        rows, total = job_repo.get_jobs(conn, company="acme")
+        assert total == 1 and rows[0]["job_id"] == 1
+
+        rows, total = job_repo.get_jobs(conn, salary="300")
+        assert total == 1 and rows[0]["job_id"] == 2
+
+        rows, total = job_repo.get_jobs(conn, location="Remote", company="acme")
+        assert total == 1  # AND across different columns
+
+    def test_get_jobs_scrape_status_multi(self, conn):
+        r1, _ = job_repo.upsert_stub(conn, job_id=1, job_url="http://1", title="A")
+        r2, _ = job_repo.upsert_stub(conn, job_id=2, job_url="http://2", title="B")
+        conn.execute("UPDATE jobs SET scrape_status='Open' WHERE id=?", (r1,))
+        conn.execute("UPDATE jobs SET scrape_status='Closed' WHERE id=?", (r2,))
+        conn.commit()
+
+        rows, total = job_repo.get_jobs(conn, scrape_status="Closed")
+        assert total == 1 and rows[0]["job_id"] == 2
+
+        rows, total = job_repo.get_jobs(conn, scrape_status="Open, Closed")
+        assert total == 2
+
     def test_enrich_job(self, conn):
         row_id, _ = job_repo.upsert_stub(conn, job_id=1, job_url="http://1")
         job_repo.enrich_job(

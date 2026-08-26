@@ -10,204 +10,173 @@
 </head>
 <body>
 
-<!-- ═══ Header ═══ -->
 <header>
   <div class="header-left">
-    <span class="logo">⌘</span>
-    <span class="logo-label">Job Hunter</span>
+    <span class="logo">Job Hunter</span>
   </div>
-  <div class="header-stats" id="stats-bar">
-    <!-- populated by JS -->
-  </div>
+  <div class="header-stats" id="stats-bar"></div>
 </header>
 
-<!-- ═══ Layout ═══ -->
 <div class="layout">
 
-  <!-- ── Sidebar ── -->
+  <!-- ═══ Sidebar ═══ -->
   <aside class="sidebar">
 
-    <!-- Panel 1: New Jobs (Harvest) -->
+    <!-- Panel 1: Search Scope -->
     <div class="panel">
       <div class="panel-header">
-        <h2>New Jobs</h2>
+        <h2>Search</h2>
         <span class="step-badge">1</span>
       </div>
-      <p class="panel-hint">Scrape search pages for jobs matching your keywords.</p>
+      <p class="panel-hint">Keywords to search for on OJ.ph. Combine with categories/skills below to narrow scope.</p>
 
       <label class="field-label">Keywords</label>
       <div class="keyword-input-wrap">
-        <input type="text" id="kw-input" class="input" placeholder="e.g. data entry, VA…"
-               autocomplete="off">
-        <button class="btn-tag-add" id="kw-add" title="Add keyword">+</button>
+        <input type="text" id="kw-input" class="input" placeholder="e.g. data entry, VA" autocomplete="off">
+        <button class="btn-tag-add" id="kw-add">+</button>
       </div>
       <div class="keyword-chips" id="kw-chips"></div>
 
-      <div class="mt-2" style="display:flex; gap:6px;">
-        <button class="btn btn-outline btn-sm" id="kw-apply">Apply filters</button>
-        <button class="btn btn-ghost btn-sm" id="kw-clear" title="Clear all">✕</button>
-      </div>
+      <div class="divider"></div>
+
+      <label class="field-label">Categories (OR)</label>
+      <p class="panel-hint" style="margin-bottom:4px">Limit search to these categories. Empty = all.</p>
+      <input type="text" id="cat-search" class="input input-sm" placeholder="Filter…" style="width:100%;margin-bottom:6px">
+      <div class="check-list" id="cat-list"></div>
 
       <div class="divider"></div>
 
-      <div class="flex gap-2 align-center mb-2">
-        <label class="checkbox-label">
-          <input type="checkbox" id="filter-gig" checked> Gig
-        </label>
-        <label class="checkbox-label">
-          <input type="checkbox" id="filter-part" checked> Part-time
-        </label>
-        <label class="checkbox-label">
-          <input type="checkbox" id="filter-full" checked> Full-time
-        </label>
-      </div>
+      <label class="field-label">Skills (OR)</label>
+      <p class="panel-hint" style="margin-bottom:4px">Only show jobs with these skills. Empty = all.</p>
+      <input type="text" id="skill-search" class="input" placeholder="Filter…" style="width:100%;margin-bottom:6px">
+      <div class="check-list" id="skill-list"></div>
 
-      <div class="flex gap-1 align-center mb-2">
-        <label class="field-label" style="margin:0; flex-shrink:0;">Posted since</label>
-        <input type="date" id="posted-since" class="input" style="flex:1">
-      </div>
-
-      <button class="btn btn-primary" id="btn-harvest">
-        <span id="harvest-label">Scrape new jobs</span>
+      <button class="btn btn-primary mt-3" id="btn-harvest">
+        <span id="harvest-label">Scrape jobs</span>
       </button>
     </div>
 
-    <!-- Panel 2: Check Statuses -->
+    <!-- Panel 2: Keyword Filters (post-enrichment) -->
     <div class="panel">
       <div class="panel-header">
-        <h2>Check Statuses</h2>
+        <h2>Filters</h2>
         <span class="step-badge">2</span>
       </div>
-      <p class="panel-hint">Re-check existing jobs for closure or updates.</p>
+      <p class="panel-hint">Applied to enriched jobs only. Uses the full job description text.</p>
 
+      <label class="field-label" style="color:var(--green)">Keep if matches (positive)</label>
+      <div class="keyword-input-wrap">
+        <input type="text" id="pos-input" class="input" placeholder="e.g. remote, USA" autocomplete="off">
+        <button class="btn-tag-add" id="pos-add">+</button>
+      </div>
+      <div class="keyword-chips" id="pos-chips"></div>
+
+      <div class="divider"></div>
+
+      <label class="field-label" style="color:var(--red)">Hide if matches (negative)</label>
+      <div class="keyword-input-wrap">
+        <input type="text" id="neg-input" class="input" placeholder="e.g. insurance, crypto" autocomplete="off">
+        <button class="btn-tag-add" id="neg-add">+</button>
+      </div>
+      <div class="keyword-chips" id="neg-chips"></div>
+
+      <button class="btn btn-outline mt-2" id="btn-apply-filters">Apply filters</button>
+    </div>
+
+    <!-- Panel 3: Check Statuses -->
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Check</h2>
+        <span class="step-badge">3</span>
+      </div>
+      <p class="panel-hint">Re-check jobs for closure/updates.</p>
       <label class="checkbox-label mb-2">
-        <input type="checkbox" id="check-all"> Re-check all jobs
+        <input type="checkbox" id="check-all"> Re-check all
       </label>
-
       <button class="btn btn-outline" id="btn-check">
         <span id="check-label">Check for updates</span>
       </button>
     </div>
 
-    <!-- Panel 3: Categories -->
+    <!-- Panel 4: Controls -->
     <div class="panel">
-      <div class="panel-header">
-        <h2>Categories</h2>
-        <span class="step-badge">3</span>
-      </div>
-      <p class="panel-hint">Browse by OnlineJobs.ph category.</p>
-
-      <div class="skills-search">
-        <input type="text" id="cat-search" class="input" placeholder="Filter categories…" autocomplete="off">
-      </div>
-      <div class="skills-list" id="cat-list"></div>
+      <button class="btn btn-danger" id="btn-stop" disabled>Stop</button>
     </div>
 
-    <!-- Panel 4: Skills -->
-    <div class="panel">
-      <div class="panel-header">
-        <h2>Skills</h2>
-        <span class="step-badge">4</span>
-      </div>
-      <p class="panel-hint">Filter jobs by skill tag.</p>
-
-      <div class="skills-search">
-        <input type="text" id="skill-search" class="input" placeholder="Search skills…" autocomplete="off">
-      </div>
-      <div class="flex gap-1 mb-2">
-        <button class="btn btn-ghost btn-sm" id="btn-refresh-skills">↻ Refresh from API</button>
-      </div>
-      <div class="skills-list" id="skill-list"></div>
-    </div>
-
-    <!-- Panel 5: Controls -->
-    <div class="panel">
-      <div class="panel-header">
-        <h2>Controls</h2>
-      </div>
-      <button class="btn btn-danger" id="btn-stop" disabled>⏹ Stop scraping</button>
-    </div>
   </aside>
 
-  <!-- ── Main Content ── -->
+  <!-- ═══ Main Content ═══ -->
   <main class="content">
 
-    <!-- Console -->
     <div class="console-wrap" id="console-wrap">
       <div class="console-header">
         <span>Activity</span>
-        <button class="console-close" id="console-close" title="Clear">✕</button>
+        <button class="console-close" id="console-close">x</button>
       </div>
       <div class="console" id="console"></div>
     </div>
 
-    <!-- Toolbar -->
     <div class="toolbar">
       <div class="toolbar-left">
-        <input type="text" id="search-box" class="input search-input"
-               placeholder="Search title, company, keyword…" autocomplete="off">
+        <input type="text" id="search-box" class="input search-input" placeholder="Search..." autocomplete="off">
         <select class="select" id="filter-status">
-          <option value="">All statuses</option>
+          <option value="">All</option>
           <option>New</option><option>Interested</option><option>Applied</option>
           <option>Interviewing</option><option>Offer</option><option>Hired</option>
           <option>Rejected</option><option>Hidden</option>
         </select>
-        <select class="select" id="filter-type">
-          <option value="">All types</option>
-          <option>Full Time</option><option>Part Time</option><option>Gig</option><option>Any</option>
-        </select>
         <label class="checkbox-label">
-          <input type="checkbox" id="filter-hidden"> Show hidden
+          <input type="checkbox" id="filter-hidden"> Hidden
         </label>
       </div>
       <div class="toolbar-right">
         <span class="result-count" id="result-count"></span>
-        <button class="btn btn-outline btn-sm" id="btn-export-csv">Export CSV</button>
+        <button class="btn btn-outline btn-sm" id="btn-export">CSV</button>
       </div>
     </div>
 
-    <!-- Table -->
     <div class="table-wrap">
       <table class="jobs-table">
         <thead>
           <tr>
             <th class="col-scrape"></th>
-            <th class="col-status">Status</th>
-            <th class="col-title">Title</th>
-            <th class="col-company">Company</th>
-            <th class="col-posted">Posted</th>
-            <th class="col-type">Type</th>
-            <th class="col-salary">Salary</th>
-            <th class="col-actions"></th>
+            <th class="sortable col-status" data-col="status"><span class="th-in"><span class="th-label">Status</span><span class="th-funnel" data-filter="status" title="Filter">▼</span></span></th>
+            <th class="sortable col-title" data-col="title"><span class="th-in"><span class="th-label">Title</span><span class="th-funnel" data-filter="title" title="Filter">▼</span></span></th>
+            <th class="sortable col-company" data-col="company"><span class="th-in"><span class="th-label">Company</span><span class="th-funnel" data-filter="company" title="Filter">▼</span></span></th>
+            <th class="sortable col-posted" data-col="posted_date"><span class="th-in"><span class="th-label">Posted</span><span class="th-funnel" data-filter="posted" title="Filter">▼</span></span></th>
+            <th class="sortable col-type" data-col="work_type"><span class="th-in"><span class="th-label">Type</span><span class="th-funnel" data-filter="work_type" title="Filter">▼</span></span></th>
+            <th class="sortable col-salary" data-col="salary"><span class="th-in"><span class="th-label">Salary</span><span class="th-funnel" data-filter="salary" title="Filter">▼</span></span></th>
+            <th class="sortable col-location" data-col="location"><span class="th-in"><span class="th-label">Location</span><span class="th-funnel" data-filter="location" title="Filter">▼</span></span></th>
+            <th class="sortable col-hours" data-col="hours_per_week"><span class="th-in"><span class="th-label">Hours</span><span class="th-funnel" data-filter="hours" title="Filter">▼</span></span></th>
           </tr>
         </thead>
         <tbody id="jobs-tbody">
-          <tr class="empty-row"><td colspan="8">Loading…</td></tr>
+          <tr class="empty-row"><td colspan="9">Loading...</td></tr>
         </tbody>
       </table>
     </div>
-
-    <!-- Pagination -->
-    <div class="pagination" id="pagination"></div>
   </main>
 </div>
 
-<!-- ═══ Detail Panel ═══ -->
+<!-- ═══ Detail Panel (full job overview) ═══ -->
 <div class="detail-overlay" id="detail-overlay"></div>
 <div class="detail-panel" id="detail-panel">
   <div class="detail-header">
     <div class="detail-header-top">
-      <div class="detail-title" id="detail-title"></div>
-      <button class="detail-close" id="detail-close">✕</button>
-    </div>
-    <div class="detail-meta">
-      <span class="detail-company" id="detail-company"></span>
-      <span class="status-badge" id="detail-status"></span>
-      <span class="work-type" id="detail-work-type"></span>
+      <div>
+        <div class="detail-title" id="detail-title"></div>
+        <div class="detail-meta">
+          <span class="detail-company" id="detail-company"></span>
+          <span class="status-badge" id="detail-status"></span>
+          <span class="work-type" id="detail-work-type"></span>
+        </div>
+      </div>
+      <button class="detail-close" id="detail-close">x</button>
     </div>
   </div>
 
   <div class="detail-body">
+    <!-- Key facts grid -->
     <div class="detail-section">
       <div class="detail-grid">
         <div class="detail-field">
@@ -219,10 +188,6 @@
           <div class="val" id="detail-hours"></div>
         </div>
         <div class="detail-field">
-          <label>Location</label>
-          <div class="val" id="detail-location"></div>
-        </div>
-        <div class="detail-field">
           <label>Posted</label>
           <div class="val cell-date" id="detail-posted"></div>
         </div>
@@ -230,32 +195,32 @@
           <label>Updated</label>
           <div class="val cell-date" id="detail-updated"></div>
         </div>
-        <div class="detail-field">
-          <label>Source</label>
-          <div class="val cell-mono" id="detail-source"></div>
-        </div>
       </div>
     </div>
 
+    <!-- Skills -->
     <div class="detail-section" id="detail-skills-section">
       <h3>Skills</h3>
       <div id="detail-skills"></div>
     </div>
 
-    <div class="detail-section" id="detail-desc-section">
-      <h3>Description</h3>
+    <!-- FULL JOB DESCRIPTION - the main content -->
+    <div class="detail-section detail-desc-section">
+      <h3>Job Overview</h3>
       <div class="detail-desc" id="detail-desc"></div>
     </div>
 
+    <!-- Notes -->
     <div class="detail-section">
       <h3>Notes</h3>
-      <textarea class="notes-area" id="detail-notes" placeholder="Add notes…"></textarea>
+      <textarea class="notes-area" id="detail-notes" placeholder="Add notes..."></textarea>
       <div class="notes-row mt-2">
-        <button class="btn btn-outline btn-sm" id="detail-save-notes">Save notes</button>
+        <button class="btn btn-outline btn-sm" id="detail-save-notes">Save</button>
         <span class="notes-hint" id="notes-saved-hint"></span>
       </div>
     </div>
 
+    <!-- Follow-up -->
     <div class="detail-section">
       <h3>Follow-up</h3>
       <div class="followup-row">
@@ -268,22 +233,17 @@
   <div class="detail-actions">
     <div class="detail-actions-row">
       <select class="status-select" id="detail-status-select">
-        <option value="">Change status…</option>
+        <option value="">Change status...</option>
         <option>New</option><option>Interested</option><option>Applied</option>
         <option>Interviewing</option><option>Offer</option><option>Hired</option>
         <option>Rejected</option><option>Hidden</option>
       </select>
-      <a class="btn btn-outline" id="detail-apply" target="_blank">Open on OJ.ph ↗</a>
-    </div>
-    <div class="detail-actions-row">
-      <button class="btn btn-ghost" id="detail-recheck">↻ Re-check this job</button>
+      <a class="btn btn-outline" id="detail-apply" target="_blank">Apply on OJ.ph</a>
     </div>
   </div>
 </div>
 
-<!-- ═══ Toast ═══ -->
 <div class="toast" id="toast"></div>
-
 <script src="/static/app.js"></script>
 </body>
 </html>

@@ -45,6 +45,7 @@ def search_url(
     part_time: bool = True,
     full_time: bool = True,
     category: str | None = None,
+    skill_ids: list[int] | None = None,
 ) -> str:
     """Build a search URL.
 
@@ -58,9 +59,13 @@ def search_url(
     base = f"{base_url}/jobseekers/jobsearch"
     if offset > 0:
         base += f"/{offset}"
+
+    # skill_tags takes comma-separated numeric skill IDs
+    skill_tags_str = ",".join(str(i) for i in (skill_ids or []))
+
     params = [
         f"jobkeyword={quote_plus(keyword)}",
-        "skill_tags=",
+        f"skill_tags={quote_plus(skill_tags_str)}",
         f"gig={'on' if gig else 'off'}",
         f"partTime={'on' if part_time else 'off'}",
         f"fullTime={'on' if full_time else 'off'}",
@@ -72,113 +77,106 @@ def search_url(
 def harvest(
     client: OJClient,
     keyword: str = "",
-    category: str | None = None,
+    categories: list[str] | None = None,
+    skill_ids: list[int] | None = None,
     posted_since: str | None = None,
     existing_ids: set[int] | None = None,
 ) -> Generator[PipelineEvent, None, None]:
     """
     Phase 1: scrape search result pages.
-    Yields PipelineEvents as it goes.
+    
+    If `categories` is provided, search within each category.
+    Otherwise use the global keyword search.
+    `skill_ids` are passed to OJ.ph's skill_tags URL parameter.
+    `keyword` is used as a client-side filter on results.
     """
     existing_ids = existing_ids or set()
-    keyword = (keyword or "").strip()
-    page = 0
+    keyword = (keyword or "").strip().lower()
     total_new = 0
     total_seen = 0
-    expected_total: int | None = None
 
-    yield PipelineEvent("log", f"Starting harvest: keyword={keyword!r}, category={category!r}")
+    # Determine which URLs to search
+    if categories:
+        yield PipelineEvent("log", f"Harvest: {len(categories)} cats, kw={keyword!r}, skills={len(skill_ids or [])}")
+        search_targets = [(cat, cat) for cat in categories]
+    else:
+        yield PipelineEvent("log", f"Harvest: kw={keyword!r}, skills={len(skill_ids or [])}")
+        search_targets = [("all", None)]
 
-    while True:
-        if client.stopped:
-            yield PipelineEvent("log", "⛔ Stopped by user")
-            break
+    for label, slug in search_targets:
+        page = 0
+        expected_total = None
 
-        url = search_url(client.base_url, keyword, page, category=category)
-        yield PipelineEvent("log", f"  Page {page + 1} → {url}")
+        while True:
+            if client.stopped:
+                yield PipelineEvent("log", "[STOPPED]")
+                break
 
-        try:
-            resp = client.get(url)
-        except ScrapeStopped:
-            yield PipelineEvent("log", "⛔ Stopped")
-            break
-        except RateLimitExhausted as exc:
-            yield PipelineEvent("error", f"Rate limit exhausted: {exc}")
-            break
-        except Exception as exc:
-            yield PipelineEvent("error", f"Failed to fetch page {page + 1}: {exc}")
-            break
+            url = search_url(client.base_url, keyword, page, category=slug, skill_ids=skill_ids)
+            yield PipelineEvent("log", f"  [{label}] page {page + 1}")
 
-        # Check total on first page
-        if page == 0:
-            expected_total = get_total_results(resp.text)
-            if expected_total:
-                yield PipelineEvent("log", f"  Total results: {expected_total}")
+            try:
+                resp = client.get(url)
+            except ScrapeStopped:
+                yield PipelineEvent("log", "[STOPPED]")
+                break
+            except RateLimitExhausted as exc:
+                yield PipelineEvent("error", f"Rate limit: {exc}")
+                break
+            except Exception as exc:
+                yield PipelineEvent("error", f"Fetch error: {exc}")
+                break
 
-        stubs = parse_search_results(resp.text)
-        if not stubs:
-            yield PipelineEvent("log", f"  No jobs on page {page + 1} — stopping")
-            break
+            if page == 0:
+                expected_total = get_total_results(resp.text)
+                if expected_total:
+                    yield PipelineEvent("log", f"    total: {expected_total}")
 
-        new_stubs: list[JobStub] = []
-        oldest_date = None
+            stubs = parse_search_results(resp.text)
+            if not stubs:
+                break
 
-        for stub in stubs:
-            total_seen += 1
-            if stub.job_id and stub.job_id in existing_ids:
-                continue
-
-            # posted_since filter
-            if posted_since and stub.posted_date:
-                if stub.posted_date < posted_since:
-                    oldest_date = stub.posted_date
+            new_stubs = []
+            for stub in stubs:
+                total_seen += 1
+                if stub.job_id and stub.job_id in existing_ids:
                     continue
+                # Keyword filter (client-side): title must contain any keyword
+                if keyword:
+                    title_lower = (stub.title or "").lower()
+                    if not any(kw in title_lower for kw in keyword.split(",")):
+                        continue
+                if posted_since and stub.posted_date and stub.posted_date < posted_since:
+                    continue
+                new_stubs.append(stub)
 
-            new_stubs.append(stub)
+            if new_stubs:
+                yield PipelineEvent(
+                    "harvest_result",
+                    f"  [{label}] page {page + 1}: {len(new_stubs)} new",
+                    {"stubs": [
+                        {
+                            "job_id": s.job_id, "job_url": s.job_url,
+                            "title": s.title, "work_type": s.work_type,
+                            "company": s.company, "posted_date": s.posted_date,
+                            "salary": s.salary, "location": s.location,
+                            "hours": s.hours, "skills": s.skills,
+                        } for s in new_stubs
+                    ], "keyword": keyword, "category": slug},
+                )
+                total_new += len(new_stubs)
 
-        yield PipelineEvent(
-            "harvest_result",
-            f"  Page {page + 1}: {len(stubs)} seen, {len(new_stubs)} new",
-            {"stubs": [
-                {
-                    "job_id": s.job_id,
-                    "job_url": s.job_url,
-                    "title": s.title,
-                    "work_type": s.work_type,
-                    "company": s.company,
-                    "posted_date": s.posted_date,
-                    "salary": s.salary,
-                    "location": s.location,
-                    "hours": s.hours,
-                    "skills": s.skills,
-                }
-                for s in new_stubs
-            ], "keyword": keyword, "category": category},
-        )
-        total_new += len(new_stubs)
-
-        # Stop conditions
-        if posted_since and oldest_date and oldest_date < posted_since:
-            yield PipelineEvent("log", f"  Reached jobs older than {posted_since} — stopping")
-            break
-
-        # Check if we've seen all expected results
-        if expected_total and total_seen >= expected_total:
-            yield PipelineEvent("log", f"  All {expected_total} results processed")
-            break
-
-        # No new stubs and we're past page 1 — probably all duplicates
-        if page > 0 and not new_stubs:
-            yield PipelineEvent("log", f"  No new jobs on page {page + 1} — stopping")
-            break
-
-        page += 1
-        time.sleep(0.5)  # small pause between pages (the client already throttles)
+            # Stop conditions
+            if expected_total and total_seen >= expected_total:
+                break
+            if page > 0 and not new_stubs:
+                break
+            page += 1
 
     yield PipelineEvent(
         "summary",
-        f"Harvest complete: {total_new} new, {total_seen} total seen",
-        {"new": total_new, "seen": total_seen, "expected": expected_total},
+        f"Harvest done: {total_new} new / {total_seen} seen",
+        {"new": total_new, "seen": total_seen},
     )
 
 

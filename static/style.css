@@ -30,10 +30,10 @@
   --sans:        'Syne', sans-serif;
 }
 
-html { font-size: 14px; }
+html { font-size: 14px; height: 100%; overflow: hidden; }
 body {
   font-family: var(--sans); background: var(--bg); color: var(--text);
-  min-height: 100vh; display: flex; flex-direction: column; overflow-x: hidden;
+  height: 100vh; display: flex; flex-direction: column; overflow: hidden;
 }
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -228,7 +228,38 @@ header {
 .col-type    { width: 80px; }
 .col-salary  { width: 110px; }
 .col-source  { width: 100px; }
-.col-actions { width: 60px; }
+.col-location { width: 100px; }
+.col-hours    { width: 70px; }
+.col-actions  { width: 60px; }
+
+/* ── Excel-style column headers: click to sort, ▼ to filter ── */
+.jobs-table th.sortable { cursor: pointer; user-select: none; }
+.jobs-table th.sortable:hover .th-label { color: var(--text2); }
+.th-in { display: inline-flex; align-items: center; gap: 7px; }
+th.sorted-asc .th-label::after,
+th.sorted-desc .th-label::after { margin-left: 5px; font-size: 0.6rem; color: var(--accent); }
+th.sorted-asc .th-label::after  { content: '▲'; }
+th.sorted-desc .th-label::after { content: '▼'; }
+.th-funnel {
+  font-size: 0.55rem; padding: 2px 5px; border-radius: 4px;
+  color: var(--text3); opacity: 0.55; cursor: pointer;
+}
+.th-funnel:hover { opacity: 1; background: var(--bg4); }
+.th-funnel.active { opacity: 1; color: var(--blue); font-weight: 700; }
+
+.th-filter-pop {
+  position: fixed; z-index: 1000; width: 230px;
+  background: var(--bg3); border: 1px solid var(--border2);
+  border-radius: var(--radius-lg); box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+  padding: 10px 12px;
+}
+.th-filter-pop .fp-title {
+  font-size: 0.65rem; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.08em; color: var(--text3); margin-bottom: 8px;
+}
+.th-filter-pop .fp-list { max-height: 210px; overflow-y: auto; margin-bottom: 8px; }
+.th-filter-pop .fp-list .checkbox-label { display: block; margin: 3px 0; }
+.th-filter-pop .fp-actions { display: flex; justify-content: flex-end; gap: 6px; }
 
 .cell-title { font-weight: 600; color: var(--text); font-size: 0.84rem; }
 .cell-mono  { font-family: var(--mono); font-size: 0.75rem; }
@@ -321,9 +352,30 @@ header {
 .detail-field .val { font-size: 0.82rem; color: var(--text2); }
 
 .detail-desc {
-  font-size: 0.82rem; line-height: 1.6; color: var(--text2);
+  font-size: 0.84rem; line-height: 1.7; color: var(--text);
   white-space: pre-wrap; word-wrap: break-word;
+  max-height: 400px; overflow-y: auto;
+  background: var(--bg3); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 14px;
 }
+.detail-desc-section { margin-bottom: 20px; }
+
+/* ── Checkbox lists (categories, skills) ── */
+.check-list {
+  max-height: 240px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 4px; background: var(--bg3);
+  margin-bottom: 8px;
+}
+.check-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 6px; border-radius: 4px;
+  font-size: 0.78rem; color: var(--text2); cursor: pointer;
+  transition: background 0.1s;
+}
+.check-item:hover { background: var(--bg4); }
+.check-item input { accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+.check-item .cat-count { margin-left: auto; font-family: var(--mono); font-size: 0.68rem; color: var(--text3); }
 
 .detail-salary {
   font-family: var(--mono); font-size: 0.95rem;
@@ -354,21 +406,18 @@ header {
 }
 .status-select:focus { border-color: var(--accent); }
 
-/* ── Pagination ── */
-.pagination {
-  display: flex; align-items: center; justify-content: center;
-  gap: 8px; padding: 12px 16px;
-  border-top: 1px solid var(--border); flex-shrink: 0; background: var(--bg2);
+/* ── No pagination: full scrollable table ── */
+.filter-banner {
+  padding: 6px 16px; font-size: 0.78rem; font-family: var(--mono);
+  background: var(--accent-dim); border-bottom: 1px solid rgba(212,165,99,0.3);
+  color: var(--accent); display: none; flex-shrink: 0;
 }
-.page-btn {
-  padding: 4px 10px; border-radius: 4px;
-  background: var(--bg3); border: 1px solid var(--border);
-  color: var(--text2); font-size: 0.78rem; cursor: pointer;
-  font-family: var(--mono);
+.filter-banner .filter-clear {
+  background: none; border: 1px solid var(--accent); color: var(--accent);
+  border-radius: 3px; padding: 1px 6px; font-size: 0.72rem; cursor: pointer;
+  margin-left: 8px;
 }
-.page-btn:hover { border-color: var(--accent); color: var(--accent); }
-.page-btn.active { background: var(--accent); border-color: var(--accent); color: #1a1410; font-weight: 700; }
-.page-btn:disabled { opacity: 0.3; cursor: default; }
+.filter-banner .filter-clear:hover { background: var(--accent); color: #1a1410; }
 
 /* ── Skills panel ── */
 .skills-search { margin-bottom: 8px; }

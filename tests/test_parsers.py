@@ -154,35 +154,33 @@ class TestParseSearchResults:
 DETAIL_HTML = """
 <html><head></head><body>
 <div id="job-description-page">
-  <div id="job-description" data-jobid="1701282">
-    <h1 class="job__title" data-jobid="1701282">Python Developer (Jr) / Senior Backend Engineer</h1>
-    <h3 class="job__logo">
-      <img src="/employer_logos/1234/logo.png" alt="">Some Company Inc
-    </h3>
+  <h1 class="job__title" data-jobid="1701282">Python Developer (Jr) / Senior Backend Engineer</h1>
+  <h3 class="job__logo">
+    <img src="/employer_logos/1234/logo.png" alt="">Some Company Inc
+  </h3>
 
-    <div class="card">
-      <dl>
-        <dt><h3 class="fs-12">TYPE OF WORK</h3></dt>
-        <dd><p class="fs-18">Part Time</p></dd>
-        <dt><h3 class="fs-12">WAGE / SALARY</h3></dt>
-        <dd><p class="fs-18">$600/month</p></dd>
-        <dt><h3 class="fs-12">HOURS PER WEEK</h3></dt>
-        <dd><p class="fs-18">10 hours/week</p></dd>
-        <dt><h3 class="fs-12">DATE UPDATED</h3></dt>
-        <dd><p class="fs-18">2026-08-26 08:29:32</p></dd>
-      </dl>
-    </div>
-
-    <div class="skill-tags">
-      <a class="card-worker-topskill" href="/skill/python">Python</a>
-      <a class="card-worker-topskill" href="/skill/django">Django</a>
-      <a class="card-worker-topskill" href="/skill/rest-api">REST API</a>
-    </div>
-
-    <p>Job description text goes here. It spans multiple lines.
-    Line two of the description.
-    </p>
+  <div class="card">
+    <dl>
+      <dt><h3 class="fs-12">TYPE OF WORK</h3></dt>
+      <dd><p class="fs-18">Part Time</p></dd>
+      <dt><h3 class="fs-12">WAGE / SALARY</h3></dt>
+      <dd><p class="fs-18">$600/month</p></dd>
+      <dt><h3 class="fs-12">HOURS PER WEEK</h3></dt>
+      <dd><p class="fs-18">10 hours/week</p></dd>
+      <dt><h3 class="fs-12">DATE UPDATED</h3></dt>
+      <dd><p class="fs-18">2026-08-26 08:29:32</p></dd>
+    </dl>
   </div>
+
+  <div class="skill-tags">
+    <a class="card-worker-topskill" href="/skill/python">Python</a>
+    <a class="card-worker-topskill" href="/skill/django">Django</a>
+    <a class="card-worker-topskill" href="/skill/rest-api">REST API</a>
+  </div>
+
+  <p id="job-description" class="job-description" data-jobid="1701282">Job description text goes here. It spans multiple lines.
+  Line two of the description.
+  </p>
 </div>
 </body></html>
 """
@@ -232,12 +230,10 @@ class TestParseJobDetail:
     def test_description_strips_title(self):
         """Description should not repeat the title on the first line."""
         html = """
-        <div id="job-description" data-jobid="123">
-          <h1 class="job__title" data-jobid="123">My Title</h1>
-          <p>My Title
-          Actual content here.
-          </p>
-        </div>
+        <h1 class="job__title" data-jobid="123">My Title</h1>
+        <p id="job-description" class="job-description" data-jobid="123">My Title
+        Actual content here.
+        </p>
         """
         d = parse_job_detail(html)
         assert d.description

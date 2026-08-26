@@ -10,7 +10,8 @@ from pydantic import BaseModel
 
 class PipelineRequest(BaseModel):
     keyword: str = ""
-    category: str | None = None
+    categories: list[str] = []      # category slugs (OR scope)
+    skills: list[str] = []          # skill names (OR scope)
     posted_since: date | None = None
 
 
@@ -20,7 +21,7 @@ class CheckRequest(BaseModel):
     max_age_days: int = 7
 
 
-# ── Keywords ────────────────────────────────────────────────────────────────
+# ── Keyword filters (post-enrichment) ───────────────────────────────────────
 
 class KeywordFilter(BaseModel):
     positive: list[str] = []

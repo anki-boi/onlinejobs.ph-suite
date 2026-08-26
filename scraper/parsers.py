@@ -283,36 +283,19 @@ def parse_job_detail(html: str, url: str = "") -> JobDetail:
             logo_img.extract()
         company = _clean(logo_h3.get_text())
 
-    # Description
-    desc_div = soup.select_one("div#job-description, div.job-description")
-    if desc_div:
-        oid = desc_div.get("data-jobid")
+    # Description: always in <p id="job-description" class="job-description">
+    desc_p = soup.select_one("p#job-description")
+    if desc_p:
+        oid = desc_p.get("data-jobid")
         if oid and not job_id:
             job_id = int(oid)
-        # The description text is in <p> children (not the title h1 or logo h3)
-        desc_parts = []
-        for p in desc_div.find_all("p"):
-            # Skip if it's the title or structured field values
-            if p.select_one("h3.fs-12") or p.get("class"):  # skip structured field <p class='fs-18'>
-                continue
-            text = p.get_text("\n", strip=True)
-            if text:
-                desc_parts.append(text)
-        if desc_parts:
-            description = "\n".join(desc_parts)
-            # Remove the first line if it's a repeat of the title
+        description = desc_p.get_text("\n", strip=True)
+        # Clean: remove first line if it repeats the title
+        if description and title:
             lines = description.split("\n")
-            if title and lines and title[:30] in lines[0]:
+            if lines and title[:30] in lines[0]:
                 lines = lines[1:]
             description = "\n".join(lines).strip() or None
-    else:
-        # Fallback: p#job-description (some pages use this)
-        desc_p = soup.select_one("p#job-description")
-        if desc_p:
-            oid = desc_p.get("data-jobid")
-            if oid and not job_id:
-                job_id = int(oid)
-            description = desc_p.get_text("\n", strip=True)
 
     # Structured fields
     fields = _parse_structured_fields(soup)

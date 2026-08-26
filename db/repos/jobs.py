@@ -13,6 +13,19 @@ STATUSES = [
 SCRAPE_STATUSES = ["Open", "Closed", ""]
 
 
+# Columns the API may sort by (Excel-style header sorting).
+SORTABLE = {
+    "title", "company", "salary", "location", "hours_per_week", "work_type",
+    "posted_date", "date_updated", "date_found", "status", "scrape_status", "skills",
+}
+
+def _split_multi(value: str | None) -> list[str]:
+    """'a,b, c' → ['a','b','c'] (stripped, non-empty)."""
+    if not value:
+        return []
+    return [v.strip() for v in value.split(",") if v.strip()]
+
+
 def get_jobs(
     conn: sqlite3.Connection,
     page: int = 1,
@@ -22,8 +35,24 @@ def get_jobs(
     include_hidden: bool = False,
     work_type: str | None = None,
     skill: str | None = None,
+    skills: str | None = None,
+    scrape_status: str | None = None,
+    sort: str | None = None,
+    order: str = "desc",
+    title: str | None = None,
+    company: str | None = None,
+    salary: str | None = None,
+    location: str | None = None,
+    hours: str | None = None,
+    posted: str | None = None,
 ) -> tuple[list[sqlite3.Row], int]:
-    """Return (rows, total_count) with optional filters and pagination."""
+    """Return (rows, total_count) with optional filters and pagination.
+
+    Multi-value filters (status, work_type, scrape_status, skills) take
+    comma-separated strings and OR within their own group.
+    Text filters (title, company, salary, location, hours) are LIKE matches.
+    `sort` must be in SORTABLE, else the default (newest first) applies.
+    """
     clauses: list[str] = []
     params: list = []
 
@@ -31,18 +60,41 @@ def get_jobs(
         clauses.append("status != 'Hidden'")
 
     if status:
-        statuses = [s.strip() for s in status.split(",")]
-        placeholders = ",".join("?" * len(statuses))
-        clauses.append(f"status IN ({placeholders})")
-        params.extend(statuses)
+        statuses = _split_multi(status)
+        if statuses:
+            placeholders = ",".join("?" * len(statuses))
+            clauses.append(f"status IN ({placeholders})")
+            params.extend(statuses)
 
     if work_type:
-        clauses.append("work_type = ?")
-        params.append(work_type)
+        wts = _split_multi(work_type)
+        if wts:
+            placeholders = ",".join("?" * len(wts))
+            clauses.append(f"work_type IN ({placeholders})")
+            params.extend(wts)
+
+    if scrape_status:
+        ss = _split_multi(scrape_status)
+        if ss:
+            placeholders = ",".join("?" * len(ss))
+            clauses.append(f"scrape_status IN ({placeholders})")
+            params.extend(ss)
+
+    if skills:
+        sks = _split_multi(skills)
+        if sks:
+            clauses.append("(" + " OR ".join("skills LIKE ?" for _ in sks) + ")")
+            params.extend(f"%{s}%" for s in sks)
 
     if skill:
         clauses.append("skills LIKE ?")
         params.append(f"%{skill}%")
+
+    for col, val in (("title", title), ("company", company), ("salary", salary),
+                     ("location", location), ("hours_per_week", hours), ("posted_date", posted)):
+        if val:
+            clauses.append(f"{col} LIKE ?")
+            params.append(f"%{val}%")
 
     if search:
         like = f"%{search}%"
@@ -55,9 +107,15 @@ def get_jobs(
         f"SELECT COUNT(*) FROM jobs {where}", params
     ).fetchone()[0]
 
+    if sort in SORTABLE:
+        order_sql = "ASC" if order.strip().lower() == "asc" else "DESC"
+        order_by = f"{sort} {order_sql}"
+    else:
+        order_by = "date_found DESC, id DESC"
+
     offset = (page - 1) * per_page
     rows = conn.execute(
-        f"SELECT * FROM jobs {where} ORDER BY date_found DESC, id DESC LIMIT ? OFFSET ?",
+        f"SELECT * FROM jobs {where} ORDER BY {order_by}, id DESC LIMIT ? OFFSET ?",
         params + [per_page, offset],
     ).fetchall()
 

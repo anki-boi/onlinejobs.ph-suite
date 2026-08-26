@@ -6,13 +6,12 @@ Run:  uvicorn app.server:app --reload
 
 import json
 import logging
-from datetime import datetime
+import sqlite3
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi import Request
 
 from app.schemas import (
     CheckRequest,
@@ -26,9 +25,9 @@ from app.sse import sse
 from db.connection import init_db, get_conn, BASE_DIR
 from db.repos import jobs as job_repo
 from db.repos import skills as skill_repo
-from scraper.client import OJClient, ScrapeStopped
+from scraper.client import OJClient
 from scraper.pipeline import enrich, harvest
-from scraper.skills import fetch_skills, skills_to_db_rows, top_level_categories
+from scraper.skills import fetch_skills, skills_to_db_rows
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -40,11 +39,9 @@ app = FastAPI(title="Job Hunter")
 STATIC_DIR = BASE_DIR / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-# Load config
 _cfg_path = BASE_DIR / "config.json"
 _cfg = json.loads(_cfg_path.read_text()) if _cfg_path.exists() else {}
 
-# Shared scraper client (for stop control)
 _client: OJClient | None = None
 
 def get_client() -> OJClient:
@@ -58,7 +55,6 @@ def get_client() -> OJClient:
             user_agent=_cfg.get("user_agent", ""),
         )
     return _client
-
 
 def get_db():
     return init_db(get_conn())
@@ -82,12 +78,25 @@ def list_jobs(
     include_hidden: bool = False,
     work_type: str | None = None,
     skill: str | None = None,
+    skills: str | None = None,  # comma-separated OR filter
+    scrape_status: str | None = None,  # comma-separated, e.g. "Open,Closed"
+    sort: str | None = None,  # any sortable column, else newest-first
+    order: str = "desc",  # asc | desc
+    title: str | None = None,
+    company: str | None = None,
+    salary: str | None = None,
+    location: str | None = None,
+    hours: str | None = None,
+    posted: str | None = None,
 ):
     conn = get_db()
     rows, total = job_repo.get_jobs(
         conn, page=page, per_page=per_page, status=status,
         search=search, include_hidden=include_hidden,
-        work_type=work_type, skill=skill,
+        work_type=work_type, skill=skill, skills=skills,
+        scrape_status=scrape_status, sort=sort, order=order,
+        title=title, company=company, salary=salary,
+        location=location, hours=hours, posted=posted,
     )
     return {"jobs": [dict(r) for r in rows], "total": total, "page": page, "per_page": per_page}
 
@@ -156,13 +165,11 @@ def skill_categories():
 
 @app.post("/api/skills/refresh")
 def refresh_skills():
-    """Re-fetch all skills from the API and update the DB."""
     client = get_client()
     try:
         skills = fetch_skills(client, keyword="")
     except Exception as exc:
         raise HTTPException(502, f"Skills API error: {exc}")
-
     rows = skills_to_db_rows(skills)
     conn = get_db()
     count = skill_repo.upsert_skills(conn, rows)
@@ -179,21 +186,43 @@ def run_pipeline(body: PipelineRequest):
     client.reset()
 
     keyword = (body.keyword or "").strip()
-    category = body.category
+    categories = body.categories or []
     posted_since = body.posted_since.isoformat() if body.posted_since else None
 
-    if not keyword and not category:
-        raise HTTPException(400, "Keyword or category is required")
+    # Resolve skill names to OJ.ph IDs via the skills API
+    skill_ids: list[int] = []
+    if body.skills:
+        from scraper.skills import fetch_skills
+        try:
+            all_skills = fetch_skills(client, keyword="")
+            # Build a name→id lookup
+            lookup = {}
+            for s in all_skills:
+                lookup[s.get("name", "").lower()] = s.get("id")
+            for name in body.skills:
+                oid = lookup.get(name.lower())
+                if oid:
+                    skill_ids.append(oid)
+                else:
+                    # Fuzzy match
+                    for k, v in lookup.items():
+                        if name.lower() in k:
+                            skill_ids.append(v)
+                            break
+        except Exception as exc:
+            log.warning(f"Skill ID lookup failed: {exc}")
+        if skill_ids:
+            log.info(f"Resolved {len(skill_ids)} skill IDs: {skill_ids}")
 
     existing_ids = job_repo.get_existing_job_ids(conn)
 
     def generate():
-        # Phase 1: Harvest
         new_job_ids: list[int] = []
         for event in harvest(
             client,
             keyword=keyword,
-            category=category,
+            categories=categories or None,
+            skill_ids=skill_ids or None,
             posted_since=posted_since,
             existing_ids=existing_ids,
         ):
@@ -217,12 +246,24 @@ def run_pipeline(body: PipelineRequest):
                         hours=stub_data.get("hours"),
                         skills=stub_data.get("skills") or None,
                         search_keyword=keyword or None,
-                        search_category=category or None,
+                        search_category=event.data.get("category"),
                     )
                     if is_new:
                         inserted += 1
                         if stub_data.get("job_id"):
                             new_job_ids.append(row_id)
+                        # Emit each new job immediately for real-time UI
+                        yield sse("harvest_stub", {
+                            "row_id": row_id,
+                            "job_id": stub_data.get("job_id"),
+                            "title": stub_data.get("title"),
+                            "company": stub_data.get("company"),
+                            "work_type": stub_data.get("work_type"),
+                            "posted_date": stub_data.get("posted_date"),
+                            "salary": stub_data.get("salary"),
+                            "skills": stub_data.get("skills"),
+                            "job_url": stub_data.get("job_url"),
+                        })
                 yield sse("harvest_done", {"inserted": inserted, "total": len(event.data.get("stubs", []))})
             elif event.type == "summary":
                 yield sse("harvest_summary", event.data)
@@ -233,7 +274,6 @@ def run_pipeline(body: PipelineRequest):
 
         # Phase 2: Enrich new jobs
         if new_job_ids:
-            # Get URLs for the new jobs
             rows = conn.execute(
                 f"SELECT id, job_url FROM jobs WHERE id IN ({','.join('?' * len(new_job_ids))})",
                 new_job_ids,
@@ -269,13 +309,12 @@ def run_pipeline(body: PipelineRequest):
 
         yield sse("done", "complete")
 
-    from fastapi.responses import StreamingResponse
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 @app.post("/api/pipeline/check")
 def run_check(body: CheckRequest):
-    """Re-check existing jobs (by default: New/Open status, or all if recheck_all)."""
+    """Re-check existing jobs."""
     conn = get_db()
     client = get_client()
     client.reset()
@@ -326,7 +365,6 @@ def run_check(body: CheckRequest):
                 yield sse("enrich_summary", event.data)
         yield sse("done", "complete")
 
-    from fastapi.responses import StreamingResponse
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
@@ -337,13 +375,29 @@ def stop_pipeline():
     return {"ok": True, "message": "Stop signal sent"}
 
 
-# ── Keyword filters ─────────────────────────────────────────────────────────
+# ── Keyword filters (post-enrichment) ───────────────────────────────────────
 
 @app.post("/api/keywords/apply")
 def apply_keywords(body: KeywordFilter):
+    """
+    Apply positive/negative keyword filters to ENRICHED jobs only.
+    Positive: hide jobs that DON'T match any positive keyword.
+    Negative: hide jobs that DO match any negative keyword.
+    Only touches jobs where description IS NOT NULL.
+    """
+    positive = [k.strip() for k in body.positive if k.strip()]
+    negative = [k.strip() for k in body.negative if k.strip()]
+    if not positive and not negative:
+        return {"hidden_by_negative": 0, "hidden_by_positive": 0, "total_hidden": 0}
+
     conn = get_db()
-    neg_hidden = _hide_by_negative(conn, body.negative)
-    pos_hidden = _hide_by_positive(conn, body.positive)
+    try:
+        neg_hidden, pos_hidden = _apply_keyword_filters(conn, positive, negative)
+    except sqlite3.OperationalError as exc:
+        conn.rollback()
+        raise HTTPException(
+            503, f"Database busy ({exc}) — the pipeline may be writing; try again in a moment"
+        )
     return {
         "hidden_by_negative": neg_hidden,
         "hidden_by_positive": pos_hidden,
@@ -351,42 +405,50 @@ def apply_keywords(body: KeywordFilter):
     }
 
 
-def _hide_by_negative(conn, keywords: list[str]) -> int:
-    if not keywords:
-        return 0
-    rows = conn.execute(
-        "SELECT id, title, description, company FROM jobs WHERE status != 'Hidden'"
-    ).fetchall()
-    updated = 0
-    for row in rows:
-        haystack = " ".join([row["title"] or "", row["description"] or "", row["company"] or ""]).lower()
-        if any(kw.lower() in haystack for kw in keywords):
-            old = row["status"]
-            conn.execute("UPDATE jobs SET status = 'Hidden' WHERE id = ?", (row["id"],))
-            conn.execute(
-                "INSERT INTO job_history (job_id, old_status, new_status) VALUES (?, ?, 'Hidden')",
-                (row["id"], old),
-            )
-            updated += 1
-    conn.commit()
-    return updated
+def _get_haystack(row) -> str:
+    """Build searchable text from all job fields."""
+    return " ".join([
+        row["title"] or "",
+        row["description"] or "",
+        row["company"] or "",
+        row["skills"] or "",
+    ]).lower()
 
 
-def _hide_by_positive(conn, keywords: list[str]) -> int:
-    if not keywords:
-        return 0
+def _apply_keyword_filters(conn, positive: list[str], negative: list[str]) -> tuple[int, int]:
+    """Single pass over enriched jobs; batched writes; one commit.
+
+    A negative match hides any non-hidden enriched job (takes precedence).
+    Otherwise, NEW enriched jobs that match no positive keyword are hidden.
+    Returns (hidden_by_negative, hidden_by_positive).
+    """
+    neg_kws = [k.lower() for k in negative]
+    pos_kws = [k.lower() for k in positive]
+
     rows = conn.execute(
-        "SELECT id, title, description, company FROM jobs WHERE status = 'New'"
+        "SELECT id, status, title, description, company, skills FROM jobs "
+        "WHERE status != 'Hidden' AND description IS NOT NULL AND description != ''"
     ).fetchall()
-    updated = 0
+
+    to_hide: list[tuple[int, str]] = []  # (job id, old status)
+    neg_hidden = pos_hidden = 0
     for row in rows:
-        haystack = " ".join([row["title"] or "", row["description"] or "", row["company"] or ""]).lower()
-        if not any(kw.lower() in haystack for kw in keywords):
-            conn.execute("UPDATE jobs SET status = 'Hidden' WHERE id = ?", (row["id"],))
-            conn.execute(
-                "INSERT INTO job_history (job_id, old_status, new_status) VALUES (?, 'New', 'Hidden')",
-                (row["id"],),
-            )
-            updated += 1
-    conn.commit()
-    return updated
+        haystack = _get_haystack(row)
+        if neg_kws and any(k in haystack for k in neg_kws):
+            to_hide.append((row["id"], row["status"]))
+            neg_hidden += 1
+        elif row["status"] == "New" and pos_kws and not any(k in haystack for k in pos_kws):
+            to_hide.append((row["id"], "New"))
+            pos_hidden += 1
+
+    if to_hide:
+        conn.executemany(
+            "UPDATE jobs SET status = 'Hidden' WHERE id = ?",
+            [(id,) for id, _ in to_hide],
+        )
+        conn.executemany(
+            "INSERT INTO job_history (job_id, old_status, new_status) VALUES (?, ?, 'Hidden')",
+            [(id, old) for id, old in to_hide],
+        )
+        conn.commit()
+    return neg_hidden, pos_hidden
