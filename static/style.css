@@ -180,6 +180,7 @@ header {
   padding: 10px 16px; max-height: 220px; overflow-y: auto; color: var(--text2);
 }
 .console .log-line { padding: 1px 0; }
+.console .log-phase { color: var(--accent); font-weight: 700; }
 .console .log-open   { color: var(--green); }
 .console .log-closed { color: var(--red); }
 .console .log-error  { color: var(--red); }
@@ -253,6 +254,9 @@ th.sorted-desc .th-label::after { content: '▼'; }
 .th-filter-pop .fp-list { max-height: 210px; overflow-y: auto; margin-bottom: 8px; }
 .th-filter-pop .fp-list .checkbox-label { display: block; margin: 3px 0; }
 .th-filter-pop .fp-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.th-filter-pop .fp-daterange { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.th-filter-pop .fp-daterange label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }
+.th-filter-pop .fp-daterange input { flex: 1; }
 
 .cell-title { font-weight: 600; color: var(--text); font-size: 0.84rem; }
 .cell-mono  { font-family: var(--mono); font-size: 0.75rem; }

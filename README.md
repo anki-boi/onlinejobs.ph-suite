@@ -1,42 +1,81 @@
 # Job Hunter Dashboard
 
-Local job tracking dashboard for OnlineJobs.ph.
+Local job-tracking dashboard for [OnlineJobs.ph](https://www.onlinejobs.ph).
+FastAPI + SQLite backend, vanilla-JS frontend, server-sent-events live console.
 
 ## Setup
 
 ```bash
-cd job_hunter
 pip install -r requirements.txt
-uvicorn app:app --reload
+python main.py                # starts on http://127.0.0.1:8371
 ```
 
-Open http://localhost:8000
+Optional flags: `--port 8080`, `--host 0.0.0.0`, `--skip-skills`.
+First run auto-fetches the site's skill taxonomy into `jobs.db` (skippable with `--skip-skills`).
+
+Configuration lives in `config.json`:
+
+| Key | Meaning |
+|---|---|
+| `base_url` / `api_url` | Site + skills API origin |
+| `db_path` | SQLite file (relative → resolved against the project dir) |
+| `request_delay` | Global throttle between outbound requests (seconds) |
+| `max_retries` | Retries on 429/5xx (exponential backoff) |
+| `enrich_workers` | Parallel detail-page workers |
+| `enrich_interval_days` | "Check for updates" re-checks jobs older than this |
 
 ## Workflow
 
-1. **Enter Search Keyword** — search jobs by keyword (e.g., "medical", "bookkeeping", "designer")
-2. **Set Posted Since** (optional) — only scrape jobs posted after a specific date
-3. **Run Pipeline** — harvests links page-by-page, then fetches full details for each job
-4. **Add Keywords** — positive (keep) and negative (hide) filters applied post-scrape
-5. **Apply Keyword Filters** — hide jobs that don't match your positive keywords or match negative keywords
+1. **Scrape jobs** — enter a keyword (e.g. `bookkeeper`) and/or pick categories & skills,
+   then click **Scrape jobs**. The console streams live: harvest stubs land in the table
+   as they're found, then the enrich phase reports progress `[n/N]` and a summary
+   (`▸ Enrich: X open, Y closed, Z err`).
+2. **Filter the table** — search box, column funnels (each header has a ▼ filter),
+   the "With salary" toggle, and header-click sorting. The *Date posted* column sorts
+   chronologically / reverse-chronologically and filters by a **From/To date range**.
+3. **Keyword auto-hide** — maintain positive (keep) and negative (hide) keyword chips,
+   then **Apply**. Non-matching jobs are hidden automatically and restored if they
+   later start matching. Manually set statuses are never clobbered by the filter.
+4. **Track** — click any row for the detail modal: change status
+   (New → Interested → Applied → …), notes, follow-up date, and view history.
+   The green/red/gray dot shows the site-side state (Open / Closed / unknown).
+5. **Check for updates** — re-fetches detail pages for jobs whose check is stale
+   (or never checked). Deleted listings (HTTP 404/410, "no longer available" wording)
+   are marked **Closed**. **Stop** aborts a run mid-flight; the console says how
+   far it got.
 
-**Tip:** Click the **Stop** button during pipeline execution to halt scraping early. This is useful when you hit rate limits (HTTP 429) or want to stop after collecting enough jobs.
+**Tips**
 
-## Notes
-
-- **Tag searching is deprecated** — use keyword search instead
-- Hidden jobs stay in the DB for deduplication — they won't resurface in future scrapes
-- Re-check Open Jobs re-fetches details for all New/Open jobs (useful after a partial run)
-- Click any row to open the detail modal — update status, add notes
+- Keep keywords narrow — every page/detail page is a real request to the site,
+  throttled to 1/second.
+- Hidden jobs stay in the DB for dedup — they won't resurface in future scrapes.
+- Export the current view to CSV from the toolbar.
 
 ## Files
 
-| File | Purpose |
+| Path | Purpose |
 |---|---|
-| `app.py` | FastAPI backend, all API routes |
-| `db.py` | All SQLite access |
-| `scraper.py` | Scraping logic (tags, links, job details) |
-| `static/app.js` | Frontend logic |
-| `static/style.css` | Styling |
-| `templates/index.html` | Dashboard HTML |
-| `jobs.db` | SQLite database (auto-created) |
+| `main.py` | Entry point (DB init, skills refresh, uvicorn) |
+| `config.json` | Runtime configuration |
+| `app/server.py` | FastAPI app: REST + SSE endpoints |
+| `app/schemas.py` / `app/sse.py` | Pydantic models / SSE helpers |
+| `db/connection.py` | Schema, migrations (version-gated), `get_db()` |
+| `db/migrate.py` | One-time data repairs run on version bumps |
+| `db/repos/jobs.py` | Job CRUD + query + status history |
+| `db/repos/skills.py` | Skill taxonomy store |
+| `scraper/client.py` | HTTP client: throttle, backoff, stop signal |
+| `scraper/parsers.py` | HTML → structured data (search list, detail, closed detection) |
+| `scraper/pipeline.py` | `harvest()` / `enrich()` event generators |
+| `scraper/skills.py` | Skills API client |
+| `static/index.html` / `static/app.js` / `static/style.css` | Dashboard UI |
+| `tests/` | pytest suite (DB, parsers, pipeline, API) |
+
+## Development
+
+```bash
+python -m pytest tests/ -q      # full suite, no network
+JOBS_DB_PATH=/tmp/sandbox.db python main.py --port 8372   # run against a DB copy
+```
+
+`JOBS_DB_PATH` (absolute, or relative to the project dir) overrides `db_path` —
+used to test against a copy of a real database.

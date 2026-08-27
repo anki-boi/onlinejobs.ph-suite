@@ -5,7 +5,7 @@ tests/test_db.py — DB schema and repository tests.
 import pytest
 import sqlite3
 
-from db.connection import SCHEMA
+from db.connection import SCHEMA, SCHEMA_VERSION, init_db
 from db.repos import jobs as job_repo
 from db.repos import skills as skill_repo
 
@@ -228,6 +228,122 @@ class TestJobRepos:
         row = job_repo.get_job(conn, row_id)
         assert row["scrape_status"] == "Closed"
         assert row["scrape_reason"] == "404"
+
+    def test_get_jobs_posted_sort_matches_display(self, conn):
+        """The cell shows posted_date, falling back to date_found when missing.
+        Sorting must match that displayed value in both directions — otherwise
+        rows with a missing posted date (showing a recent date_found) sit at the
+        top of ASC and read as a broken sort."""
+        r1, _ = job_repo.upsert_stub(conn, job_id=1, job_url="http://1", title="old")
+        conn.execute("UPDATE jobs SET posted_date='2025-06-01', date_found='2026-08-26 11:00:00' WHERE id=?", (r1,))
+        r2, _ = job_repo.upsert_stub(conn, job_id=2, job_url="http://2", title="no-posted-date")
+        conn.execute("UPDATE jobs SET posted_date=NULL, date_found='2026-08-25 09:00:00' WHERE id=?", (r2,))
+        r3, _ = job_repo.upsert_stub(conn, job_id=3, job_url="http://3", title="mid")
+        conn.execute("UPDATE jobs SET posted_date='2026-01-01', date_found='2026-08-26 10:00:00' WHERE id=?", (r3,))
+        conn.commit()
+
+        rows, _ = job_repo.get_jobs(conn, sort="posted_date", order="asc")
+        assert [r["job_id"] for r in rows] == [1, 3, 2]
+
+        rows, _ = job_repo.get_jobs(conn, sort="posted_date", order="desc")
+        assert [r["job_id"] for r in rows] == [2, 3, 1]
+
+    def test_get_jobs_posted_range(self, conn):
+        r1, _ = job_repo.upsert_stub(conn, job_id=1, job_url="http://1", title="a")
+        conn.execute("UPDATE jobs SET posted_date='2026-01-15 10:00:00', date_found='2026-08-26 11:00:00' WHERE id=?", (r1,))
+        r2, _ = job_repo.upsert_stub(conn, job_id=2, job_url="http://2", title="b")
+        conn.execute("UPDATE jobs SET posted_date=NULL, date_found='2026-08-25 09:00:00' WHERE id=?", (r2,))
+        r3, _ = job_repo.upsert_stub(conn, job_id=3, job_url="http://3", title="c")
+        conn.execute("UPDATE jobs SET posted_date='2026-01-05', date_found='2026-08-26 10:00:00' WHERE id=?", (r3,))
+        conn.commit()
+
+        rows, _ = job_repo.get_jobs(conn, posted_from="2026-01-10")
+        assert [r["job_id"] for r in rows] == [1, 2]  # date_found fallback counts
+
+        # boundary inclusive: posted on exactly the To date is included
+        rows, _ = job_repo.get_jobs(conn, posted_to="2026-01-05")
+        assert [r["job_id"] for r in rows] == [3]
+
+        rows, _ = job_repo.get_jobs(conn, posted_from="2026-01-01", posted_to="2026-01-31")
+        assert sorted(r["job_id"] for r in rows) == [1, 3]
+
+        rows, _ = job_repo.get_jobs(conn, posted_from="2026-02-01")
+        assert [r["job_id"] for r in rows] == [2]
+
+    def test_needing_enrichment_domain_guard(self, conn):
+        job_repo.upsert_stub(conn, job_id=1, job_url="https://www.onlinejobs.ph/jobseekers/job/x-1")
+        job_repo.upsert_stub(conn, job_id=2, job_url="http://test.com/2")
+
+        rows = job_repo.get_jobs_needing_enrichment(
+            conn, max_age_days=7, status_filter=["New"], base_url="https://www.onlinejobs.ph"
+        )
+        assert [r["job_url"] for r in rows] == ["https://www.onlinejobs.ph/jobseekers/job/x-1"]  # test.com never re-checked
+
+        # no guard → both included (back-compat)
+        rows = job_repo.get_jobs_needing_enrichment(conn, max_age_days=7, status_filter=["New"])
+        assert [r["job_url"] for r in rows] == [
+            "https://www.onlinejobs.ph/jobseekers/job/x-1", "http://test.com/2"
+        ]
+
+
+class TestMigrations:
+    def test_init_db_is_idempotent_and_honest(self):
+        """B1/B2 regression: repeated init_db() must NOT re-stamp
+        scrape_status on never-checked jobs (old code ran the UPDATE on
+        every request, turning 'unknown' into false 'Open')."""
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(SCHEMA)
+        job_repo.upsert_stub(conn, job_id=7, job_url="http://x/7", title="T")
+
+        init_db(conn)  # first run: version bump + one-time migration
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        # never checked ⇒ unknown (empty), never 'Open'
+        assert conn.execute(
+            "SELECT scrape_status FROM jobs WHERE job_id=7"
+        ).fetchone()[0] in ("", None)
+
+        init_db(conn)  # second run: pure no-op
+        row = conn.execute("SELECT scrape_status FROM jobs WHERE job_id=7").fetchone()
+        assert row[0] in ("", None)
+
+    def test_enriched_rows_keep_their_status(self):
+        """The v2 repair must only touch never-checked rows."""
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(SCHEMA)
+        rid, _ = job_repo.upsert_stub(conn, job_id=8, job_url="http://x/8", title="T")
+        job_repo.enrich_job(conn, rid, description="d", is_closed=False)
+        init_db(conn)
+        assert conn.execute(
+            "SELECT scrape_status FROM jobs WHERE job_id=8"
+        ).fetchone()[0] == "Open"
+
+    def test_old_db_repair_on_version_bump(self):
+        """A pre-v2 file with the historical corruption (never-checked rows
+        stamped 'Open') gets repaired exactly once on the version bump."""
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(SCHEMA)
+        # simulate the old code's corruption: never-checked but 'Open'
+        conn.execute(
+            "INSERT INTO jobs (job_id, job_url, status, scrape_status, last_checked) "
+            "VALUES (1, 'http://old/1', 'New', 'Open', NULL)"
+        )
+        conn.execute(
+            "INSERT INTO jobs (job_id, job_url, status, scrape_status, last_checked) "
+            "VALUES (2, 'http://old/2', 'New', 'Open', '2026-08-01 10:00:00')"
+        )
+        conn.commit()
+
+        init_db(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        assert conn.execute(
+            "SELECT scrape_status FROM jobs WHERE job_id=1"
+        ).fetchone()[0] in ("", None)  # repaired → unknown
+        assert conn.execute(
+            "SELECT scrape_status FROM jobs WHERE job_id=2"
+        ).fetchone()[0] == "Open"  # genuinely checked → kept
 
 
 class TestSkillRepos:

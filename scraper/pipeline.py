@@ -207,8 +207,11 @@ def enrich(
             if client.stopped:
                 return row_id, None, "stopped"
             resp = client.get(url)
-            if resp.status_code == 404:
-                return row_id, JobDetail(job_url=url, is_closed=True, close_reason="404 Not Found"), None
+            if resp.status_code in (404, 410):
+                # 404 = removed, 410 = permanently deleted ("Job No Longer Posted").
+                # Both mean the posting is gone → Closed.
+                reason = f"{resp.status_code} — job removed from site"
+                return row_id, JobDetail(job_url=url, is_closed=True, close_reason=reason), None
             detail = parse_job_detail(resp.text, url=url)
             return row_id, detail, None
         except ScrapeStopped:
@@ -217,7 +220,8 @@ def enrich(
             return row_id, None, str(exc)
 
     done = 0
-    with ThreadPoolExecutor(max_workers=workers) as pool:
+    pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="enrich")
+    try:
         futures = {pool.submit(_fetch_one, rid, url): (rid, url) for rid, url in jobs}
 
         for future in as_completed(futures):
@@ -231,7 +235,8 @@ def enrich(
             if err:
                 error_count += 1
                 yield PipelineEvent("enrich_result", f"[{done}/{len(jobs)}] ⚠ {url} — {err}",
-                                   {"row_id": row_id, "error": err})
+                                   {"row_id": row_id, "error": err,
+                                    "progress": f"{done}/{len(jobs)}"})
                 continue
 
             if detail is None:
@@ -251,6 +256,7 @@ def enrich(
                 "enrich_result",
                 f"[{done}/{len(jobs)}] {icon} {'Closed' if detail.is_closed else 'Open'} {url}{note}",
                 {
+                    "progress": f"{done}/{len(jobs)}",
                     "row_id": row_id,
                     "job_id": detail.job_id,
                     "title": detail.title,
@@ -266,6 +272,17 @@ def enrich(
                     "close_reason": detail.close_reason,
                 },
             )
+    finally:
+        # The context-manager form (with ThreadPoolExecutor) crashes when this
+        # generator is closed from one of the pool's own threads — CPython's gc
+        # can reclaim the generator frame on any thread, and join() then raises
+        # "cannot join current thread" (seen in server_e2e.log on client
+        # disconnect). wait=False + cancel_futures is safe from every thread;
+        # in-flight requests run to their natural end and the workers exit.
+        try:
+            pool.shutdown(wait=True, cancel_futures=True)
+        except RuntimeError:
+            pool.shutdown(wait=False, cancel_futures=True)
 
     yield PipelineEvent(
         "summary",

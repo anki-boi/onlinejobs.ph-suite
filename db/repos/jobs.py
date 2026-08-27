@@ -44,7 +44,8 @@ def get_jobs(
     salary: str | None = None,
     location: str | None = None,
     hours: str | None = None,
-    posted: str | None = None,
+    posted_from: str | None = None,
+    posted_to: str | None = None,
     has_salary: bool = False,
 ) -> tuple[list[sqlite3.Row], int]:
     """Return (rows, total_count) with optional filters and pagination.
@@ -52,6 +53,9 @@ def get_jobs(
     Multi-value filters (status, work_type, scrape_status, skills) take
     comma-separated strings and OR within their own group.
     Text filters (title, company, salary, location, hours) are LIKE matches.
+    `posted_from` / `posted_to` (inclusive date range) filter on the *displayed*
+    posted date: posted_date, falling back to date_found when the posted date
+    was never captured.
     `sort` must be in SORTABLE, else the default (newest first) applies.
     """
     clauses: list[str] = []
@@ -92,10 +96,22 @@ def get_jobs(
         params.append(f"%{skill}%")
 
     for col, val in (("title", title), ("company", company), ("salary", salary),
-                     ("location", location), ("hours_per_week", hours), ("posted_date", posted)):
+                     ("location", location), ("hours_per_week", hours)):
         if val:
             clauses.append(f"{col} LIKE ?")
             params.append(f"%{val}%")
+
+    if posted_from or posted_to:
+        # Same expression the table cell displays (posted_date or date_found fallback),
+        # so the filter matches what the user sees. date() makes both forms
+        # ("YYYY-MM-DD" and "YYYY-MM-DD HH:MM:SS") compare as calendar dates.
+        eff = "date(COALESCE(NULLIF(posted_date, ''), date_found))"
+        if posted_from:
+            clauses.append(f"{eff} >= ?")
+            params.append(posted_from)
+        if posted_to:
+            clauses.append(f"{eff} <= ?")
+            params.append(posted_to)
 
     if has_salary:
         # "Has a salary" = the field contains at least one digit. Excludes every
@@ -116,9 +132,16 @@ def get_jobs(
 
     if sort in SORTABLE:
         order_sql = "ASC" if order.strip().lower() == "asc" else "DESC"
-        order_by = f"{sort} {order_sql}"
+        if sort == "posted_date":
+            # Sort on the displayed value (posted_date, falling back to date_found
+            # when the posted date is missing). SQLite would otherwise put
+            # NULL-posted_date rows at the top of ASC while their cell shows a
+            # recent date_found — which reads as a broken sort.
+            order_by = f"date(COALESCE(NULLIF(posted_date, ''), date_found)) {order_sql}"
+        else:
+            order_by = f"{sort} {order_sql}"
     else:
-        order_by = "date_found DESC, id DESC"
+        order_by = "date_found DESC"
 
     offset = (page - 1) * per_page
     rows = conn.execute(
@@ -307,13 +330,23 @@ def get_jobs_needing_enrichment(
     conn: sqlite3.Connection,
     max_age_days: int = 7,
     status_filter: list[str] | None = None,
+    base_url: str | None = None,
 ) -> list[sqlite3.Row]:
-    """Jobs that need detail-page re-check: never checked, or checked > max_age_days ago."""
+    """Jobs that need detail-page re-check: never checked, or checked > max_age_days ago.
+
+    When `base_url` is given, only jobs whose URL is under that site are returned —
+    stray rows (e.g. test fixtures pointing at fake domains) would otherwise burn
+    retries and produce an error on every check run.
+    """
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     clauses = [
         "(last_checked IS NULL OR last_checked = '' OR last_checked < datetime('now', ?))"
     ]
     params: list = [f"-{max_age_days} days"]
+
+    if base_url:
+        clauses.append("job_url LIKE ?")
+        params.append(base_url.rstrip('/') + '/%')
 
     if status_filter:
         placeholders = ",".join("?" * len(status_filter))

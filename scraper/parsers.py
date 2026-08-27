@@ -323,6 +323,11 @@ def parse_job_detail(html: str, url: str = "") -> JobDetail:
             "job has been closed",
             "this job is no longer available",
             "position has been filled",
+            # HTTP 410 page: <h1>Job No Longer Posted</h1> — "This job post has been
+            # deleted and is no longer visible."
+            "job no longer posted",
+            "no longer visible",
+            "has been deleted",
         ):
             if phrase in page_text:
                 is_closed = True

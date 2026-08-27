@@ -197,6 +197,16 @@ CLOSED_HTML = """
 </body></html>
 """
 
+# Live HTTP 410 page: the posting was deleted from the site.
+GONE_HTML = """
+<html><body>
+<div class="container">
+  <h1 class="text-jumbo">Job No Longer Posted</h1>
+  <p>This job post has been deleted and is no longer visible. Check out our Job Search page.</p>
+</div>
+</body></html>
+"""
+
 
 class TestParseJobDetail:
     def test_basic_fields(self):
@@ -250,3 +260,21 @@ class TestStatusValues:
         assert "Hired" in STATUSES
         assert "Hidden" in STATUSES
         assert len(STATUSES) == 8
+
+
+class TestParseJobDetailGone:
+    """HTTP 410 "Job No Longer Posted" page → Closed (was previously misread as Open)."""
+
+    def test_gone_page_is_closed(self):
+        d = parse_job_detail(
+            GONE_HTML, url="https://www.onlinejobs.ph/jobseekers/job/copywriter-social-media-expert-874602"
+        )
+        assert d.is_closed is True
+        assert d.close_reason == "job no longer posted"
+        assert d.title is None
+        assert d.description is None
+
+    def test_live_page_not_closed(self):
+        d = parse_job_detail(DETAIL_HTML, url="/jobseekers/job/x-1")
+        assert d.is_closed is False
+        assert d.title

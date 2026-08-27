@@ -11,12 +11,13 @@ const state = {
   includeHidden: false,
   total: 0,
   scraping: false,
+  activeRun: null,        // 'harvest' | 'check' | null — drives button phase labels
   // Excel-style column controls
   sort: '', order: 'desc',
   hasSalaryOnly: false,   // "With salary" toggle (toolbar + Salary ▼ share this one state)
   stats: null,            // last /api/stats payload, feeds the next-step hint
   colFilters: { status: [], work_type: [], scrape: [],
-                title: '', company: '', posted: '', salary: '', hours: '' },
+                title: '', company: '', posted: {from:'', to:''}, salary: '', hours: '' },
 };
 
 // Known values for checkbox-style column filters
@@ -101,8 +102,11 @@ async function loadJobs() {
   if (state.skills.length) p.set('skills', state.skills.join(','));
   if (state.colFilters.work_type.length) p.set('work_type', state.colFilters.work_type.join(','));
   if (state.colFilters.scrape.length) p.set('scrape_status', state.colFilters.scrape.join(','));
-  for (const k of ['title','company','posted','salary','hours'])
+  for (const k of ['title','company','salary','hours'])
     if (state.colFilters[k]) p.set(k, state.colFilters[k]);
+  const pf = state.colFilters.posted || {};
+  if (pf.from) p.set('posted_from', pf.from);
+  if (pf.to) p.set('posted_to', pf.to);
   if (state.hasSalaryOnly) p.set('has_salary','1');
   if (state.sort) { p.set('sort', state.sort); p.set('order', state.order); }
   try {
@@ -121,7 +125,8 @@ function jobRowHtml(j) {
   const dotTitle = j.scrape_status ? `Job is ${j.scrape_status} on OJ.ph` : 'Not checked yet';
   const wt = j.work_type ? j.work_type.split(' ')[0] : '';
   const wtCls = j.work_type ? j.work_type.replace(/ /g,'') : '';
-  const skillsHtml = j.skills ? j.skills.split(',').slice(0,3).map(s=>`<span class="skill-tag">${esc(s.trim())}</span>`).join('') : '';
+  const skillsArr = j.skills ? (Array.isArray(j.skills) ? j.skills : String(j.skills).split(',')) : [];
+  const skillsHtml = skillsArr.slice(0,3).map(s=>`<span class="skill-tag">${esc(String(s).trim())}</span>`).join('');
   // Two kinds of hidden: yours (solid) vs keyword auto-hide (dashed, remembers what it was)
   const badge = j.status === 'Hidden'
     ? (j.filter_hidden
@@ -150,7 +155,10 @@ function insertStubRow(d) {
   // Remove empty row if present
   const empty = tbody.querySelector('.empty-row');
   if (empty) empty.remove();
-  // Prepend the new row
+  // Prepend the new row. The server sends skills as a JSON array —
+  // normalise to the CSV string the row renderer expects (B3: the old code
+  // called .split() on the array and threw, killing the whole run UI).
+  const skillsStr = Array.isArray(d.skills) ? d.skills.join(', ') : (d.skills || null);
   const j = {
     id: d.row_id,
     title: d.title,
@@ -158,10 +166,10 @@ function insertStubRow(d) {
     work_type: d.work_type,
     posted_date: d.posted_date,
     salary: d.salary,
-    skills: d.skills,
+    skills: skillsStr,
     hours_per_week: d.hours || null,
     status: 'New',
-    scrape_status: 'Open',
+    scrape_status: null,   // not checked yet — honest gray dot until enrich
     date_found: new Date().toISOString().slice(0,10),
   };
   tbody.insertAdjacentHTML('afterbegin', jobRowHtml(j));
@@ -285,50 +293,75 @@ async function openDetail(id) {
 }
 function closeDetail() { detailPanel.classList.remove('open'); detailOverlay.classList.remove('open'); currentJob=null; }
 
-// ── SSE ─────────────────────────────────────────────────────────────────────
+// ── SSE ───────────────────────────────────────────────────────────────────
 async function streamSSE(url, body) {
   const res = await fetch(url, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
   if (!res.ok) { const e=await res.json().catch(()=>({})); throw new Error(e.detail||res.statusText); }
   const reader = res.body.getReader();
   const dec = new TextDecoder();
   let buf='', ev='';
-  while(true) {
-    const {done,value} = await reader.read();
-    if (done) break;
-    buf += dec.decode(value,{stream:true});
-    const lines = buf.split('\n'); buf = lines.pop();
-    for (const line of lines) {
-      const t = line.trim();
-      if (t.startsWith('event:')) ev = t.slice(6).trim();
-      else if (t.startsWith('data:')) {
-        let d; try { d=JSON.parse(t.slice(5).trim()); } catch { d=t.slice(5).trim(); }
-        handleSSE(ev, d);
+  try {
+    while(true) {
+      const {done,value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value,{stream:true});
+      const lines = buf.split('\n'); buf = lines.pop();
+      for (const line of lines) {
+        const t = line.trim();
+        if (t.startsWith('event:')) ev = t.slice(6).trim();
+        else if (t.startsWith('data:')) {
+          let d; try { d=JSON.parse(t.slice(5).trim()); } catch { d=t.slice(5).trim(); }
+          handleSSE(ev, d);
+        }
       }
     }
+  } finally {
+    // On any failure, cancel the body so the server-side run actually stops
+    // (an abandoned-but-open stream would keep scraping in the background
+    // while the UI already shows the run as dead).
+    try { await reader.cancel(); } catch {}
   }
 }
+// Phase-transition log lines get the ▸ accent treatment so the run's
+// current phase is visible at a glance in the activity feed.
+const PHASE_RE = /^(Harvest:|Harvest done|Enriching|No new jobs|No jobs|\[STOPPED\]|⛔)/;
 function handleSSE(ev, d) {
   switch(ev) {
-    case 'log': log(`> ${typeof d==='string'?d:d.message||''}`); break;
+    case 'log': {
+      const msg = typeof d==='string'?d:(d.message||'');
+      const phase = PHASE_RE.test(msg);
+      log(phase ? `▸ ${msg}` : `> ${msg}`, phase ? 'log-phase' : '');
+      break;
+    }
     case 'error': log(`! ${typeof d==='string'?d:d.message||''}`, 'log-error'); break;
     case 'harvest_stub':
       insertStubRow(d);
       break;
     case 'harvest_done': log(`  +${d.inserted} saved`, 'log-done'); break;
-    case 'harvest_summary': log(`Harvest: ${d.new} new / ${d.seen} seen`, 'log-done'); loadJobs(); break;
+    case 'harvest_summary':
+      log(`▸ Harvest: ${d.new} new / ${d.seen} seen`, 'log-phase log-done');
+      if (state.activeRun === 'harvest') $('#harvest-label').textContent = d.new ? 'Enriching…' : 'Scraping…';
+      loadJobs();
+      break;
     case 'enrich_done': {
+      if (d.error) { log(`  ${d.progress||''} [err] ${d.error}`.trim(), 'log-error'); break; }
       const icon = d.is_closed?'[X]':'[ok]';
-      log(`  ${icon} ${d.title||d.row_id}`, d.is_closed?'log-closed':'log-open');
+      const filled = ['title','company','description','salary','skills'].filter(k=> Array.isArray(d[k]) ? d[k].length : !!d[k]);
+      let line = `  ${d.progress||''} ${icon} ${d.title||d.row_id}`.trim();
+      if (filled.length) line += `  (${filled.join(', ')})`;
+      log(line, d.is_closed?'log-closed':'log-open');
       break;
     }
-    case 'enrich_summary': log(`Enrich: ${d.open} open, ${d.closed} closed, ${d.errors} err`, 'log-done'); loadJobs(); break;
+    case 'enrich_summary':
+      log(`▸ Enrich: ${d.open} open, ${d.closed} closed, ${d.errors} err${d.total?` (of ${d.total})`:''}`, 'log-phase log-done');
+      loadJobs();
+      break;
     case 'done': {
       log(`Done: ${typeof d==='string'?d:''}`, 'log-done');
       setScraping(false);
       loadJobs(); loadStats();
       // If skills were selected, auto-filter the table to show matching jobs
       if (state.skills.length) {
-        state.skills.forEach(() => {}); // already in state, loadJobs uses it
         toast(`Showing ${state.skills.length} skill filter(s) applied`, 'info');
       }
       break;
@@ -337,6 +370,7 @@ function handleSSE(ev, d) {
 }
 function setScraping(on) {
   state.scraping = on;
+  state.activeRun = null;
   $('#btn-harvest').disabled = on;
   $('#btn-check').disabled = on;
   $('#btn-stop').disabled = !on;
@@ -351,7 +385,7 @@ async function runPipeline() {
   const cats = state.categories;
   const skills = state.skills;
   // No requirement — can run with just keywords, just categories, just skills, or nothing
-  consoleEl.innerHTML=''; setScraping(true);
+  consoleEl.innerHTML=''; setScraping(true); state.activeRun='harvest';
   log(`Scrape: kw="${kw}" cats=[${cats.length}] skills=[${skills.length}]`);
   try {
     await streamSSE('/api/pipeline/run', {
@@ -364,7 +398,7 @@ async function runPipeline() {
 }
 
 async function runCheck() {
-  consoleEl.innerHTML=''; setScraping(true);
+  consoleEl.innerHTML=''; setScraping(true); state.activeRun='check';
   log($('#check-all').checked?'Checking ALL jobs...':'Checking New/Interested...');
   try {
     await streamSSE('/api/pipeline/check', {workers:3, recheck_all:$('#check-all').checked});
@@ -544,13 +578,16 @@ function init() {
   });
 
 function toggleSort(col) {
-  if (state.sort !== col) {
-    state.sort = col;
-    state.order = SORT_DEFAULT_ORDER[col] || 'asc';
-  } else if (state.order === 'asc') {
-    state.order = 'desc';
+  const def = SORT_DEFAULT_ORDER[col] || 'asc';
+  if (state.sort === col) {
+    // Clicking the same header: flip direction until the default is reached
+    // again, then off. (The old logic skipped one direction entirely for
+    // date columns, whose default is 'desc'.)
+    if (state.order === def) state.order = def === 'asc' ? 'desc' : 'asc';
+    else { state.sort = ''; state.order = 'desc'; }
   } else {
-    state.sort = ''; state.order = 'desc';
+    state.sort = col;
+    state.order = def;
   }
   updateSortIndicators();
   loadJobs();
@@ -571,7 +608,10 @@ function updateFunnelIndicators() {
       fn.classList.toggle('active', state.hasSalaryOnly || !!state.colFilters.salary);
     } else {
       const v = state.colFilters[k];
-      const active = Array.isArray(v) ? v.length > 0 : !!v;
+      let active;
+      if (Array.isArray(v)) active = v.length > 0;
+      else if (k === 'posted') active = !!(v && (v.from || v.to));
+      else active = !!v;
       fn.classList.toggle('active', active);
     }
   });
@@ -607,6 +647,15 @@ function openColFilter(col, th) {
       <div class="fp-title" style="margin-top:6px">Contains…</div>
       <input type="text" class="input input-sm fp-text" placeholder="Type to filter" value="${esc(current)}" style="width:100%;margin-bottom:8px">
       <div class="fp-actions"><button class="btn btn-ghost btn-sm fp-clear">Clear</button><button class="btn btn-primary btn-sm fp-ok">OK</button></div>`;
+  } else if (col === 'posted') {
+    const pf = state.colFilters.posted || {from:'', to:''};
+    filterPop.innerHTML = `
+      <div class="fp-title">Date posted</div>
+      <div class="fp-daterange">
+        <label>From<input type="date" class="input input-sm fp-date" data-k="from" value="${esc(pf.from)}"></label>
+        <label>To<input type="date" class="input input-sm fp-date" data-k="to" value="${esc(pf.to)}"></label>
+      </div>
+      <div class="fp-actions"><button class="btn btn-ghost btn-sm fp-clear">Clear</button><button class="btn btn-primary btn-sm fp-ok">OK</button></div>`;
   } else {
     filterPop.innerHTML = `
       <div class="fp-title">Contains…</div>
@@ -623,11 +672,18 @@ function openColFilter(col, th) {
     if (values) filterPop.querySelectorAll('input').forEach(i => i.checked = false);
     else {
       const t = filterPop.querySelector('.fp-text'); if (t) t.value = '';
+      filterPop.querySelectorAll('.fp-date').forEach(i => i.value = '');
       const h = filterPop.querySelector('.fp-has-salary'); if (h) h.checked = false;
     }
   };
   filterPop.querySelector('.fp-ok').onclick = () => {
     if (values) state.colFilters[col] = [...filterPop.querySelectorAll('input:checked')].map(i => i.value);
+    else if (col === 'posted') {
+      state.colFilters.posted = {
+        from: filterPop.querySelector('.fp-date[data-k=from]')?.value || '',
+        to: filterPop.querySelector('.fp-date[data-k=to]')?.value || '',
+      };
+    }
     else state.colFilters[col] = (filterPop.querySelector('.fp-text')?.value || '').trim();
     if (col === 'salary') {
       state.hasSalaryOnly = !!filterPop.querySelector('.fp-has-salary')?.checked;

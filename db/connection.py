@@ -2,14 +2,24 @@
 db/connection.py — SQLite connection management.
 
 Creates the database with the full schema on first run.
+Migrations run exactly once per DB, gated by PRAGMA user_version —
+repeated init_db() calls (one per request) are cheap no-ops.
 Per-request connections (not a shared global) to avoid cross-thread issues.
+
+Set JOBS_DB_PATH (abs or relative to project root) to use an alternate DB file
+(e.g. a sandbox copy for testing).
 """
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 
 from db.migrate import migrate
+
+# Bump when the migration in db/migrate.py changes. DBs at a lower version
+# are migrated exactly once, on the next init_db(); new DBs start at this version.
+SCHEMA_VERSION = 2
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -74,7 +84,9 @@ def _load_config() -> dict:
     return {}
 
 _config = _load_config()
-DB_PATH = BASE_DIR / _config.get("db_path", "jobs.db")
+_env_db = os.environ.get("JOBS_DB_PATH")
+DB_PATH = Path(_env_db) if _env_db and os.path.isabs(_env_db) \
+    else BASE_DIR / (_env_db or _config.get("db_path", "jobs.db"))
 
 
 def get_conn(db_path: str | Path | None = None) -> sqlite3.Connection:
@@ -93,11 +105,20 @@ def get_conn(db_path: str | Path | None = None) -> sqlite3.Connection:
 
 
 def init_db(conn: sqlite3.Connection | None = None) -> sqlite3.Connection:
-    """Create tables + run migrations. Returns the connection."""
+    """Create tables + run migrations. Returns the connection.
+
+    Migrations are gated on PRAGMA user_version: they run at most once per
+    database file. This matters because every request path touches init_db()
+    — an ungated migration would re-run its UPDATE statements (write locks,
+    and stale data overwrites) on every single request.
+    """
     if conn is None:
         conn = get_conn()
     _create_tables(conn)
-    migrate(conn)
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version < SCHEMA_VERSION:
+        migrate(conn)
+        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
     return conn
 

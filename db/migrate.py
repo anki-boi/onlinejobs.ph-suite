@@ -1,9 +1,13 @@
 """
 db/migrate.py — Non-destructive migrations for older database files.
 
+Runs exactly once per DB file (gated by PRAGMA user_version in
+connection.init_db) and bumps the version when done.
+
 Handles the transition from the original schema (job_link, job_title, search_tag,
-tags_found) to the new schema (job_url, title, search_keyword, skills, etc.).
-Also seeds skill_tags from the API if the table is empty.
+tags_found) to the new schema (job_url, title, search_keyword, skills, etc.),
+seeds legacy rows, and repairs scrape_status values that the pre-2.0 code
+stamped onto jobs that were never actually checked.
 """
 
 import logging
@@ -72,6 +76,15 @@ def migrate(conn) -> None:
 
     # Seed scrape_status from the old status values where we can tell
     conn.execute("UPDATE jobs SET scrape_status = 'Open' WHERE scrape_status = '' AND status = 'New' AND job_url IS NOT NULL")
+
+    # One-time repair (v2): the seed above (and the same un-gated UPDATE the
+    # pre-2.0 code ran on every request) stamped 'Open' onto jobs that were
+    # never actually checked. A job that has never been enriched has no
+    # scrape status at all — its state is 'unknown', not 'Open'.
+    conn.execute(
+        "UPDATE jobs SET scrape_status = '', scrape_reason = '' "
+        "WHERE (last_checked IS NULL OR last_checked = '') AND scrape_status IN ('Open', 'Closed')"
+    )
 
     # Ensure unique constraint on job_url (add UNIQUE if missing by recreating)
     # SQLite doesn't support ADD CONSTRAINT, so we just rely on INSERT OR IGNORE

@@ -300,6 +300,58 @@ class TestKeywordApply:
         conn.close()
 
 
+class TestPipelineSSE:
+    def test_zero_new_jobs_emits_skip_line(self, client, monkeypatch):
+        """A run that finds nothing must say so (not skip enrich silently)."""
+        from app import server as srv
+        from scraper.pipeline import PipelineEvent
+
+        def fake_harvest(client_, **kw):
+            yield PipelineEvent("summary", "Harvest done: 0 new / 40 seen",
+                                {"new": 0, "seen": 40})
+
+        monkeypatch.setattr(srv, "harvest", fake_harvest)
+        res = client.post("/api/pipeline/run", json={
+            "keyword": "x", "categories": [], "skills": [], "posted_since": None,
+        })
+        assert res.status_code == 200
+        assert "No new jobs — skipping enrichment" in res.text
+        assert "event: done" in res.text
+        # no enrich events at all
+        assert "event: enrich_done" not in res.text
+
+    def test_enrich_error_payload_passes_through(self, client, monkeypatch):
+        """Error events keep row_id + error + progress so the frontend can
+        render a real error line instead of a fake '[ok] <id>'."""
+        from app import server as srv
+        from scraper.pipeline import PipelineEvent
+
+        def fake_enrich(client_, jobs, workers=3):
+            yield PipelineEvent("log", "Enriching 1 job(s) with 3 worker(s)…")
+            yield PipelineEvent("enrich_result", "[1/1] err",
+                                {"progress": "1/1", "row_id": 5, "error": "boom"})
+            yield PipelineEvent("summary", "done",
+                                {"open": 0, "closed": 0, "errors": 1, "total": 1})
+
+        monkeypatch.setattr(srv, "enrich", fake_enrich)
+        # seed a job so the check flow has something to re-check
+        # (URL must be under the configured base_url — stray domains are skipped by design)
+        from db.connection import get_conn
+        from db.repos import jobs as job_repo
+        c = get_conn()
+        job_repo.upsert_stub(c, job_id=5, job_url="https://www.onlinejobs.ph/jobseekers/job/x-5", title="T")
+        c.close()
+        res = client.post("/api/pipeline/check", json={"workers": 2})
+        assert res.status_code == 200
+        import json as _json
+        data_lines = [l for l in res.text.splitlines()
+                      if l.startswith("data:") and '"error"' in l]
+        payload = _json.loads(data_lines[0][len("data:"):].strip())
+        assert payload["error"] == "boom"
+        assert payload["progress"] == "1/1"
+        assert payload["row_id"] == 5
+
+
 class TestJobDetail:
     def test_found(self, client):
         from db.connection import get_conn
@@ -360,3 +412,72 @@ class TestIndex:
         res = client.get("/")
         assert res.status_code == 200
         assert "Job Hunter" in res.text
+
+
+class TestPostedRangeAPI:
+    """Date-posted column: sort matches the displayed date; range filters on the same key."""
+
+    def _seed(self, client):
+        from db.connection import get_conn
+        from db.repos import jobs as job_repo
+        conn = get_conn()
+        ids = {}
+        for n, posted, found in [
+            (1, "2026-01-15 10:00:00", "2026-08-26 11:00:00"),
+            (2, None, "2026-08-25 09:00:00"),      # no posted date → display falls back
+            (3, "2026-01-05", "2026-08-26 10:00:00"),
+        ]:
+            rid, _ = job_repo.upsert_stub(conn, job_id=n, job_url=f"http://x/{n}", title=f"Job {n}")
+            conn.execute("UPDATE jobs SET posted_date=?, date_found=? WHERE id=?", (posted, found, rid))
+            ids[n] = rid
+        conn.commit()
+        conn.close()
+        return ids
+
+    def test_sort_asc_matches_displayed_date(self, client):
+        self._seed(client)
+        res = client.get("/api/jobs?sort=posted_date&order=asc&per_page=99999")
+        assert res.status_code == 200
+        jobs = res.json()["jobs"]
+        # displayed order: 2026-01-05, 2026-01-15, then the date_found-fallback row last
+        assert [j["job_id"] for j in jobs] == [3, 1, 2]
+
+    def test_sort_desc_reversed(self, client):
+        self._seed(client)
+        res = client.get("/api/jobs?sort=posted_date&order=desc&per_page=99999")
+        assert [j["job_id"] for j in res.json()["jobs"]] == [2, 1, 3]
+
+    def test_range_filters(self, client):
+        self._seed(client)
+        assert client.get("/api/jobs?posted_from=2026-01-10").json()["total"] == 2
+        assert client.get("/api/jobs?posted_to=2026-01-05").json()["total"] == 1
+        assert client.get("/api/jobs?posted_from=2026-01-01&posted_to=2026-01-31").json()["total"] == 2
+        assert client.get("/api/jobs?posted_from=2026-02-01").json()["total"] == 1
+
+
+class TestCheckDomainGuard:
+    def test_stray_domain_jobs_are_skipped(self, client, monkeypatch):
+        from app import server as srv
+        from scraper.pipeline import PipelineEvent
+
+        seen = {}
+
+        def fake_enrich(client_, jobs, workers=3):
+            seen["jobs"] = list(jobs)
+            yield PipelineEvent("log", "x")
+            yield PipelineEvent("summary", "done",
+                                {"open": 0, "closed": 0, "errors": 0, "total": len(jobs)})
+
+        monkeypatch.setattr(srv, "enrich", fake_enrich)
+
+        from db.connection import get_conn
+        from db.repos import jobs as job_repo
+        c = get_conn()
+        good, _ = job_repo.upsert_stub(c, job_id=1, job_url="https://www.onlinejobs.ph/jobseekers/job/real-1")
+        bad, _ = job_repo.upsert_stub(c, job_id=2, job_url="http://test.com/2")
+        c.close()
+
+        res = client.post("/api/pipeline/check", json={"workers": 1})
+        assert res.status_code == 200
+        assert [j[0] for j in seen["jobs"]] == [good]  # test.com never re-checked
+        assert "test.com" not in res.text

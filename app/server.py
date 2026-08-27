@@ -22,7 +22,7 @@ from app.schemas import (
     StatusUpdate,
 )
 from app.sse import sse
-from db.connection import init_db, get_conn, BASE_DIR
+import db.connection as dbconn
 from db.repos import jobs as job_repo
 from db.repos import skills as skill_repo
 from scraper.client import OJClient
@@ -36,13 +36,21 @@ log = logging.getLogger(__name__)
 
 app = FastAPI(title="Job Hunter")
 
-STATIC_DIR = BASE_DIR / "static"
+STATIC_DIR = dbconn.BASE_DIR / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-_cfg_path = BASE_DIR / "config.json"
+_cfg_path = dbconn.BASE_DIR / "config.json"
 _cfg = json.loads(_cfg_path.read_text()) if _cfg_path.exists() else {}
 
 _client: OJClient | None = None
+
+# Default UA — a missing/empty config value must never override it with "".
+_DEFAULT_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
 
 def get_client() -> OJClient:
     global _client
@@ -52,12 +60,22 @@ def get_client() -> OJClient:
             api_url=_cfg.get("api_url", "https://api.onlinejobs.ph"),
             delay=_cfg.get("request_delay", 1.0),
             max_retries=_cfg.get("max_retries", 3),
-            user_agent=_cfg.get("user_agent", ""),
+            user_agent=_cfg.get("user_agent") or _DEFAULT_UA,
         )
     return _client
 
-def get_db():
-    return init_db(get_conn())
+_initialized_for: str | None = None
+
+
+def get_db() -> sqlite3.Connection:
+    """Per-request connection. Schema init happens once per process per DB
+    path (re-checked so a changed JOBS_DB_PATH re-initialises)."""
+    global _initialized_for
+    key = str(dbconn.DB_PATH)
+    if _initialized_for != key:
+        _initialized_for = key
+        dbconn.init_db(dbconn.get_conn())
+    return dbconn.get_conn()
 
 
 # ── HTML ────────────────────────────────────────────────────────────────────
@@ -87,7 +105,8 @@ def list_jobs(
     salary: str | None = None,
     location: str | None = None,
     hours: str | None = None,
-    posted: str | None = None,
+    posted_from: str | None = None,  # inclusive range start (YYYY-MM-DD) on the displayed posted date
+    posted_to: str | None = None,    # inclusive range end
     has_salary: bool = False,
 ):
     conn = get_db()
@@ -97,7 +116,8 @@ def list_jobs(
         work_type=work_type, skill=skill, skills=skills,
         scrape_status=scrape_status, sort=sort, order=order,
         title=title, company=company, salary=salary,
-        location=location, hours=hours, posted=posted,
+        location=location, hours=hours,
+        posted_from=posted_from, posted_to=posted_to,
         has_salary=has_salary,
     )
     return {"jobs": [dict(r) for r in rows], "total": total, "page": page, "per_page": per_page}
@@ -191,28 +211,35 @@ def run_pipeline(body: PipelineRequest):
     categories = body.categories or []
     posted_since = body.posted_since.isoformat() if body.posted_since else None
 
-    # Resolve skill names to OJ.ph IDs via the skills API
+    # Resolve skill names to OJ.ph IDs — from the local skill_tags table first
+    # (same data the UI lists); the API is only consulted for names the DB
+    # doesn't know (avoids a full skills fetch on every run).
     skill_ids: list[int] = []
     if body.skills:
-        from scraper.skills import fetch_skills
-        try:
-            all_skills = fetch_skills(client, keyword="")
-            # Build a name→id lookup
-            lookup = {}
-            for s in all_skills:
-                lookup[s.get("name", "").lower()] = s.get("id")
-            for name in body.skills:
-                oid = lookup.get(name.lower())
-                if oid:
-                    skill_ids.append(oid)
-                else:
-                    # Fuzzy match
-                    for k, v in lookup.items():
-                        if name.lower() in k:
-                            skill_ids.append(v)
-                            break
-        except Exception as exc:
-            log.warning(f"Skill ID lookup failed: {exc}")
+        db_rows = conn.execute("SELECT id, name FROM skill_tags").fetchall()
+        lookup = {r["name"].lower(): r["id"] for r in db_rows}
+        unresolved: list[str] = []
+        for name in body.skills:
+            oid = lookup.get(name.lower())
+            if oid is not None and oid not in skill_ids:
+                skill_ids.append(oid)
+            else:
+                unresolved.append(name)
+        if unresolved:
+            try:
+                api_skills = fetch_skills(client, keyword="")
+                api_lookup = {
+                    (s.get("name") or "").lower(): s.get("id")
+                    for s in api_skills
+                }
+                for name in unresolved:
+                    oid = api_lookup.get(name.lower())
+                    if oid is None:  # fuzzy: name appears in a known skill name
+                        oid = next((v for k, v in api_lookup.items() if name.lower() in k), None)
+                    if oid is not None and oid not in skill_ids:
+                        skill_ids.append(oid)
+            except Exception as exc:
+                log.warning(f"Skill ID lookup failed: {exc}")
         if skill_ids:
             log.info(f"Resolved {len(skill_ids)} skill IDs: {skill_ids}")
 
@@ -281,7 +308,11 @@ def run_pipeline(body: PipelineRequest):
                 new_job_ids,
             ).fetchall()
             jobs_to_enrich = [(r["id"], r["job_url"]) for r in rows]
+        else:
+            jobs_to_enrich = []
+            yield sse("log", "No new jobs — skipping enrichment")
 
+        if jobs_to_enrich:
             workers = _cfg.get("enrich_workers", 3)
             for event in enrich(client, jobs_to_enrich, workers=workers):
                 if event.type == "log":
@@ -332,6 +363,13 @@ def run_check(body: CheckRequest):
         )
 
     jobs_to_check = [(r["id"], r["job_url"]) for r in rows if r["job_url"]]
+
+    # Only re-check jobs on the configured site. Stray rows (test fixtures with
+    # fake domains like test.com) would otherwise burn retries and error every run.
+    base = (_cfg.get("base_url") or "").strip()
+    if base:
+        prefix = base.rstrip('/') + '/'
+        jobs_to_check = [t for t in jobs_to_check if t[1].startswith(prefix)]
 
     def generate():
         if not jobs_to_check:
