@@ -6,6 +6,7 @@ Run:  uvicorn app.server:app --reload
 
 import json
 import logging
+import re
 import sqlite3
 from pathlib import Path
 
@@ -427,6 +428,8 @@ def apply_keywords(body: KeywordFilter):
     Jobs are matched on whatever text is available — title, company, skills,
     and the description once enriched. Fresh (unenriched) stubs are included,
     so a new scrape is filtered immediately, not only after enrichment.
+    Keywords match whole words (case-insensitive, simple plurals allowed):
+    'AI' matches 'AI', 'AI-powered' but never 'email'/'chain'.
     The positive rule only reaches jobs still in 'New': a job the user has
     moved along (Interested, Applied, …) is never auto-hidden.
 
@@ -476,13 +479,32 @@ def _get_haystack(row) -> str:
     ]).lower()
 
 
+def _keyword_regexes(keywords: list[str]) -> list[re.Pattern]:
+    """Compile whole-word, case-insensitive matchers for keyword filtering.
+
+    'ai' matches 'AI', 'Ai.', 'AI-powered' (and the simple plural 'ais') but
+    not 'email', 'chain', 'maintenance'. Multi-word keywords match as phrases.
+    The optional trailing 's' is only added when the keyword ends in a letter
+    or digit, so 'call' matches 'calls' but not 'calling'.
+    """
+    out: list[re.Pattern] = []
+    for k in keywords:
+        k = k.strip().lower()
+        if not k:
+            continue
+        suffix = r"s?" if k[-1].isalnum() else ""
+        out.append(re.compile(rf"(?<!\w){re.escape(k)}{suffix}(?!\w)", re.IGNORECASE))
+    return out
+
+
 def _apply_keyword_filters(conn, positive: list[str], negative: list[str],
                            restore_all: bool = False) -> tuple[int, int, int]:
     """Single pass over all jobs; batched writes; one commit.
 
     Jobs are matched on the text available to them (title, company, skills,
     description-if-enriched) — unenriched stubs are included, so fresh harvests
-    are filtered right away.
+    are filtered right away. Keyword matching is whole-word (see
+    _keyword_regexes).
 
     Rules per job:
       hide  — matches any negative keyword; or is 'New' (or was 'New' when
@@ -494,8 +516,8 @@ def _apply_keyword_filters(conn, positive: list[str], negative: list[str],
     filter flag cleared and is treated as user-managed.
     Returns (hidden_by_negative, hidden_by_positive, restored).
     """
-    neg_kws = [k.lower() for k in negative]
-    pos_kws = [k.lower() for k in positive]
+    neg_res = _keyword_regexes(negative)
+    pos_res = _keyword_regexes(positive)
 
     rows = conn.execute(
         "SELECT id, status, filter_hidden, pre_filter_status, title, description, company, skills "
@@ -518,13 +540,13 @@ def _apply_keyword_filters(conn, positive: list[str], negative: list[str],
                 restored += 1
             continue
 
-        neg_match = bool(neg_kws) and any(k in haystack for k in neg_kws)
+        neg_match = any(p.search(haystack) for p in neg_res)
         pos_applies = (
             status == "New"
             or (status == "Hidden" and is_fh and row["pre_filter_status"] == "New")
         )
-        pos_match = bool(pos_kws) and any(k in haystack for k in pos_kws)
-        should_hide = neg_match or (pos_applies and bool(pos_kws) and not pos_match)
+        pos_match = any(p.search(haystack) for p in pos_res)
+        should_hide = neg_match or (pos_applies and bool(pos_res) and not pos_match)
 
         if should_hide:
             if status == "Hidden":

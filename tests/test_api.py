@@ -362,6 +362,75 @@ class TestPipelineSSE:
         assert payload["row_id"] == 5
 
 
+class TestKeywordMatcher:
+    """Whole-word semantics: 'AI' must not match inside other words."""
+
+    def test_ai_whole_word(self):
+        from app.server import _keyword_regexes
+        [p] = _keyword_regexes(["AI"])
+        for good in ("AI Data Annotator", "ai-powered video", "Ai.", "  ai  ", "AI models"):
+            assert p.search(good.lower()), f"should match: {good!r}"
+        for bad in ("Email Support VA", "chain of command", "maintenance", "certain", "emailing"):
+            assert not p.search(bad.lower()), f"should NOT match: {bad!r}"
+
+    def test_plural_and_multiword(self):
+        from app.server import _keyword_regexes
+        pcall, pflex = _keyword_regexes(["call", "flexible hours"])
+        assert pcall.search("phone calls")          # simple plural ok
+        assert not pcall.search("calling")          # not a different word
+        assert pflex.search("FLEXIBLE HOURS")       # phrase, case-insensitive
+        assert not pflex.search("flexiblehour")     # no boundary → no match
+
+    def test_empty_keywords_ignored(self):
+        from app.server import _keyword_regexes
+        assert _keyword_regexes(["", "   "]) == []
+
+
+class TestKeywordWholeWordAPI:
+    """End-to-end through /api/keywords/apply with the user's actual scenario."""
+
+    def test_positive_ai_does_not_match_email(self, client):
+        from db.connection import get_conn
+        from db.repos import jobs as job_repo
+
+        conn = get_conn()
+        job_repo.upsert_stub(conn, job_id=1, job_url="http://test.com/1", title="Email Support VA")
+        job_repo.upsert_stub(conn, job_id=2, job_url="http://test.com/2", title="AI Data Annotator")
+        conn.execute("UPDATE jobs SET description=? WHERE job_id=1", ("Answer email, maintain records.",))
+        conn.execute("UPDATE jobs SET description=? WHERE job_id=2", ("Train AI models.",))
+        conn.commit()
+        conn.close()
+
+        res = client.post("/api/keywords/apply", json={"positive": ["AI"], "negative": []})
+        assert res.status_code == 200
+        assert res.json()["hidden_by_positive"] == 1  # only the non-AI job
+
+        conn = get_conn()
+        assert conn.execute("SELECT status FROM jobs WHERE job_id=1").fetchone()[0] == "Hidden"
+        assert conn.execute("SELECT status FROM jobs WHERE job_id=2").fetchone()[0] == "New"
+        conn.close()
+
+    def test_negative_plural_video_catches_editors(self, client):
+        from db.connection import get_conn
+        from db.repos import jobs as job_repo
+
+        conn = get_conn()
+        job_repo.upsert_stub(conn, job_id=1, job_url="http://test.com/1", title="Short-form Video Editors")
+        job_repo.upsert_stub(conn, job_id=2, job_url="http://test.com/2", title="Audio Engineer")
+        conn.execute("UPDATE jobs SET description=? WHERE job_id=1", ("Edit TikTok videos.",))
+        conn.execute("UPDATE jobs SET description=? WHERE job_id=2", ("Mix podcasts.",))
+        conn.commit()
+        conn.close()
+
+        res = client.post("/api/keywords/apply", json={"positive": [], "negative": ["video"]})
+        assert res.json()["hidden_by_negative"] == 1
+
+        conn = get_conn()
+        assert conn.execute("SELECT status FROM jobs WHERE job_id=1").fetchone()[0] == "Hidden"
+        assert conn.execute("SELECT status FROM jobs WHERE job_id=2").fetchone()[0] == "New"
+        conn.close()
+
+
 class TestJobDetail:
     def test_found(self, client):
         from db.connection import get_conn

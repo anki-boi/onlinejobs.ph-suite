@@ -38,7 +38,10 @@ Configuration lives in `config.json`:
    that doesn't contain at least one positive keyword is hidden, and every job that
    does is restored — matched on whatever text exists yet (title, company, skills,
    description once enriched), so fresh harvests are filtered immediately.
-   Manually set statuses are never clobbered by the filter.
+   Keywords match **whole words** (case-insensitive, simple plurals included):
+   `AI` matches "AI", "AI-powered" — never "email" or "chain"; `video` catches
+   "Video Editors" but not "videography". Manually set statuses are never
+   clobbered by the filter.
 4. **Track** — click any row for the detail modal: change status
    (New → Interested → Applied → …), notes, follow-up date, and view history.
    The green/red/gray dot shows the site-side state (Open / Closed / unknown).
