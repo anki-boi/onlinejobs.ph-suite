@@ -420,9 +420,15 @@ def stop_pipeline():
 @app.post("/api/keywords/apply")
 def apply_keywords(body: KeywordFilter):
     """
-    Apply positive/negative keyword filters to ENRICHED jobs only.
+    Apply positive/negative keyword filters to all jobs.
     Positive: hide jobs that DON'T match any positive keyword.
     Negative: hide jobs that DO match any negative keyword.
+
+    Jobs are matched on whatever text is available — title, company, skills,
+    and the description once enriched. Fresh (unenriched) stubs are included,
+    so a new scrape is filtered immediately, not only after enrichment.
+    The positive rule only reaches jobs still in 'New': a job the user has
+    moved along (Interested, Applied, …) is never auto-hidden.
 
     Reversible: jobs hidden by this action are tagged (filter_hidden=1) with
     their previous status. Re-applying with changed/removed keywords restores
@@ -472,9 +478,13 @@ def _get_haystack(row) -> str:
 
 def _apply_keyword_filters(conn, positive: list[str], negative: list[str],
                            restore_all: bool = False) -> tuple[int, int, int]:
-    """Single pass over enriched jobs; batched writes; one commit.
+    """Single pass over all jobs; batched writes; one commit.
 
-    Rules per job (enriched only):
+    Jobs are matched on the text available to them (title, company, skills,
+    description-if-enriched) — unenriched stubs are included, so fresh harvests
+    are filtered right away.
+
+    Rules per job:
       hide  — matches any negative keyword; or is 'New' (or was 'New' when
               filter-hidden) and positive keywords are set but none match.
       keep  — already Hidden: left as-is (user-hidden and filter-hidden both stay).
@@ -489,7 +499,7 @@ def _apply_keyword_filters(conn, positive: list[str], negative: list[str],
 
     rows = conn.execute(
         "SELECT id, status, filter_hidden, pre_filter_status, title, description, company, skills "
-        "FROM jobs WHERE description IS NOT NULL AND description != ''"
+        "FROM jobs"
     ).fetchall()
 
     to_hide: list[tuple[int, str]] = []    # (id, previous status)

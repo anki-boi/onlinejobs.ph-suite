@@ -34,8 +34,11 @@ Configuration lives in `config.json`:
    the "With salary" toggle, and header-click sorting. The *Date posted* column sorts
    chronologically / reverse-chronologically and filters by a **From/To date range**.
 3. **Keyword auto-hide** — maintain positive (keep) and negative (hide) keyword chips,
-   then **Apply**. Non-matching jobs are hidden automatically and restored if they
-   later start matching. Manually set statuses are never clobbered by the filter.
+   then **Apply**. Positive keywords are an aggressive rule for `New` jobs: every job
+   that doesn't contain at least one positive keyword is hidden, and every job that
+   does is restored — matched on whatever text exists yet (title, company, skills,
+   description once enriched), so fresh harvests are filtered immediately.
+   Manually set statuses are never clobbered by the filter.
 4. **Track** — click any row for the detail modal: change status
    (New → Interested → Applied → …), notes, follow-up date, and view history.
    The green/red/gray dot shows the site-side state (Open / Closed / unknown).

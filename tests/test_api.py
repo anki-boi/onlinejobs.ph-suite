@@ -193,17 +193,27 @@ class TestKeywordApply:
         assert conn.execute("SELECT status FROM jobs WHERE job_id=2").fetchone()[0] == "Hidden"
         conn.close()
 
-    def test_unenriched_untouched(self, client):
+    def test_stub_filtered_on_available_fields(self, client):
+        """Unenriched stubs (no description yet) are judged on the fields they
+        DO have — a fresh harvest is filtered immediately, not only after
+        enrichment catches up."""
         from db.connection import get_conn
         from db.repos import jobs as job_repo
 
         conn = get_conn()
         job_repo.upsert_stub(conn, job_id=9, job_url="http://test.com/9", title="Stub Only")
+        job_repo.upsert_stub(conn, job_id=10, job_url="http://test.com/10",
+                             title="Xero Bookkeeper", skills=["Accounting"])
         conn.close()
 
         res = client.post("/api/keywords/apply", json={"positive": ["xero"], "negative": []})
         assert res.status_code == 200
-        assert res.json()["total_hidden"] == 0  # no description → untouched
+        assert res.json()["hidden_by_positive"] == 1  # only the description-less stub w/o 'xero'
+
+        conn = get_conn()
+        assert conn.execute("SELECT status FROM jobs WHERE job_id=9").fetchone()[0] == "Hidden"
+        assert conn.execute("SELECT status FROM jobs WHERE job_id=10").fetchone()[0] == "New"
+        conn.close()
 
     def test_reapply_after_removing_keywords_restores(self, client):
         """The user's exact scenario: filter hides a job, user changes their
