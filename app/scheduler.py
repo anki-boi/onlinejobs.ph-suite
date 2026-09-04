@@ -11,6 +11,7 @@ State lives in the app_settings table (survives restarts):
   next_run                    epoch seconds; the tick fires when now >= it
 """
 
+import json
 import logging
 import threading
 import time
@@ -97,7 +98,15 @@ def run_once(client, conn, publish) -> dict:
     new_with_salary: list[str] = []
     structure_errors: list[str] = []
 
-    for event in harvest(client, existing_ids=existing):
+    # Saved scrape scope (UI "Save scope for auto-run"). All empty = scrape
+    # everything, which is today's behavior and the default.
+    scope_kw = (settings_repo.get(conn, "scrape_keyword", "") or "").strip()
+    scope_cats = json.loads(settings_repo.get(conn, "scrape_categories", "[]") or "[]")
+    scope_skills = json.loads(settings_repo.get(conn, "scrape_skills", "[]") or "[]")
+    skill_ids = _resolve_skill_ids(conn, scope_skills)
+
+    for event in harvest(client, existing_ids=existing, keyword=scope_kw,
+                         categories=scope_cats or None, skill_ids=skill_ids or None):
         if event.type == "harvest_result":
             n, new_items = pipeline_apply.apply_harvest(conn, event)
             inserted += n
@@ -134,6 +143,20 @@ def run_once(client, conn, publish) -> dict:
             structure_errors.append(event.message)
             publish("alert", {"type": "structure", "message": event.message})
 
+    # ── Auto-apply saved keyword rules ──────────────────────────────────
+    auto_hidden = 0
+    pos = json.loads(settings_repo.get(conn, "positive_keywords", "[]") or "[]")
+    neg = json.loads(settings_repo.get(conn, "negative_keywords", "[]") or "[]")
+    if pos or neg:
+        from app.server import _apply_keyword_filters  # local import: server imports us
+        neg_h, pos_h, _restored = _apply_keyword_filters(conn, pos, neg)
+        auto_hidden = neg_h + pos_h
+        if auto_hidden:
+            publish("alert", {
+                "type": "keyword_filter", "count": auto_hidden,
+                "message": f"{auto_hidden} job(s) auto-hidden by saved keyword rules",
+            })
+
     # ── Alerts ─────────────────────────────────────────────────────────
     if inserted:
         publish("new_jobs", {"count": inserted, "titles": new_titles[:10]})
@@ -160,5 +183,15 @@ def run_once(client, conn, publish) -> dict:
         "enriched": enriched,
         "closed": closed,
         "errors": errors + len(structure_errors),
+        "auto_hidden": auto_hidden,
         "new_titles": new_titles[:10],
     }
+
+
+def _resolve_skill_ids(conn, names: list[str]) -> list[int]:
+    """Skill names → OJ.ph IDs via the local skill_tags table (the same data
+    the UI lists). Unknown names are dropped, not fetched."""
+    if not names:
+        return []
+    lookup = {r["name"].lower(): r["id"] for r in conn.execute("SELECT id, name FROM skill_tags")}
+    return [oid for n in names if (oid := lookup.get(n.lower())) is not None]

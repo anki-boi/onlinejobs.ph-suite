@@ -21,6 +21,7 @@ from app.schemas import (
     NotesUpdate,
     PipelineRequest,
     ResumeUpdate,
+    ScrapeScope,
     ScheduleUpdate,
     StatusUpdate,
     TailorRequest,
@@ -31,6 +32,7 @@ from app import pipeline_apply
 from app import scheduler
 import db.connection as dbconn
 from db.repos import jobs as job_repo
+from db.repos import settings as settings_repo
 from db.repos import skills as skill_repo
 from resumes import ats as resume_ats_mod
 from resumes import render as resume_render
@@ -656,6 +658,10 @@ def apply_keywords(body: KeywordFilter):
 
     conn = get_db()
     try:
+        # Persist the rules: the auto-run re-applies them after every harvest,
+        # and the UI hydrates its inputs from GET /api/keywords on load.
+        settings_repo.set(conn, "positive_keywords", json.dumps(positive))
+        settings_repo.set(conn, "negative_keywords", json.dumps(negative))
         neg_hidden, pos_hidden, restored = _apply_keyword_filters(
             conn, positive, negative, restore_all=body.restore
         )
@@ -671,6 +677,60 @@ def apply_keywords(body: KeywordFilter):
         "restored": restored,
         "still_filter_hidden": _filter_hidden_count(),
     }
+
+
+@app.get("/api/keywords")
+def get_keywords():
+    """Saved auto-hide rules (for UI hydration) + how many jobs they hide."""
+    conn = get_db()
+    return {
+        "positive": json.loads(settings_repo.get(conn, "positive_keywords", "[]") or "[]"),
+        "negative": json.loads(settings_repo.get(conn, "negative_keywords", "[]") or "[]"),
+        "still_filter_hidden": _filter_hidden_count(),
+    }
+
+
+# ── Auto-run scrape scope ──────────────────────────────────────────────────
+
+@app.get("/api/scrape-scope")
+def get_scrape_scope():
+    """What the auto-run harvests. All empty = scrape everything."""
+    conn = get_db()
+    return {
+        "keyword": settings_repo.get(conn, "scrape_keyword", "") or "",
+        "categories": json.loads(settings_repo.get(conn, "scrape_categories", "[]") or "[]"),
+        "skills": json.loads(settings_repo.get(conn, "scrape_skills", "[]") or "[]"),
+    }
+
+
+@app.post("/api/scrape-scope")
+def save_scrape_scope(body: ScrapeScope):
+    conn = get_db()
+    settings_repo.set(conn, "scrape_keyword", (body.keyword or "").strip())
+    settings_repo.set(conn, "scrape_categories", json.dumps(body.categories or []))
+    settings_repo.set(conn, "scrape_skills", json.dumps(body.skills or []))
+    conn.commit()
+    return get_scrape_scope()
+
+
+# ── Full reset ─────────────────────────────────────────────────────────────
+
+@app.post("/api/jobs/reset")
+def reset_jobs():
+    """Delete every job + status history. Keeps: saved keyword rules, scrape
+    scope, scheduler settings, resume masters, backups."""
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM job_history")  # also FK-cascades from jobs
+        n = conn.execute("DELETE FROM jobs").rowcount
+        conn.commit()
+    except sqlite3.OperationalError as exc:
+        conn.rollback()
+        raise HTTPException(
+            503, f"Database busy ({exc}) — the pipeline may be writing; try again in a moment"
+        )
+    events_hub.publish("jobs_reset", {"deleted_jobs": n})
+    return {"deleted_jobs": n}
 
 
 def _filter_hidden_count() -> int:

@@ -152,7 +152,7 @@ def harvest(
                 # Keyword filter (client-side): title must contain any keyword
                 if keyword:
                     title_lower = (stub.title or "").lower()
-                    if not any(kw in title_lower for kw in keyword.split(",")):
+                    if not any(kw in title_lower for kw in (k.strip() for k in keyword.split(","))):
                         continue
                 if posted_since and stub.posted_date and stub.posted_date < posted_since:
                     continue

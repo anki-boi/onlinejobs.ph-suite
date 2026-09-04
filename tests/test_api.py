@@ -634,3 +634,46 @@ class TestEventsSSE:
             assert "\"count\": 2" in msg
         finally:
             hub.unsubscribe(q)
+
+
+@pytest.fixture
+def conn(client):
+    import db.connection as dbconn
+    return dbconn.get_conn()
+
+
+def test_keywords_apply_persists(client, conn):
+    r = client.post("/api/keywords/apply",
+                    json={"positive": ["remote"], "negative": ["crypto"]})
+    assert r.status_code == 200
+    b = client.get("/api/keywords").json()
+    assert b["positive"] == ["remote"]
+    assert b["negative"] == ["crypto"]
+
+
+def test_scrape_scope_roundtrip(client):
+    r = client.post("/api/scrape-scope",
+                    json={"keyword": "VA, bookkeeping",
+                          "categories": ["Virtual Assistant"],
+                          "skills": ["Excel"]})
+    assert r.status_code == 200
+    b = client.get("/api/scrape-scope").json()
+    assert b["keyword"] == "VA, bookkeeping"
+    assert b["categories"] == ["Virtual Assistant"]
+    assert b["skills"] == ["Excel"]
+
+
+def test_reset_jobs_keeps_settings(client, conn):
+    from db.repos import jobs as job_repo
+    job_repo.upsert_stub(conn, job_id=1, job_url="http://r/1", title="A")
+    job_repo.upsert_stub(conn, job_id=2, job_url="http://r/2", title="B")
+    conn.commit()
+    client.post("/api/keywords/apply", json={"positive": ["x"], "negative": ["y"]})
+    client.post("/api/scrape-scope", json={"keyword": "zz"})
+    r = client.post("/api/jobs/reset")
+    assert r.status_code == 200
+    assert r.json()["deleted_jobs"] == 2
+    assert client.get("/api/jobs").json()["total"] == 0
+    b = client.get("/api/keywords").json()
+    assert b["positive"] == ["x"] and b["negative"] == ["y"]
+    assert client.get("/api/scrape-scope").json()["keyword"] == "zz"

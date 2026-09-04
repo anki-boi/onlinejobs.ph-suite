@@ -21,6 +21,13 @@ class CheckRequest(BaseModel):
     max_age_days: int = 7
 
 
+class ScrapeScope(BaseModel):
+    """What the auto-run harvests. All empty = scrape everything (today's behavior)."""
+    keyword: str = ""
+    categories: list[str] = []
+    skills: list[str] = []
+
+
 # ── Auto-run ────────────────────────────────────────────────────────────────
 
 class ScheduleUpdate(BaseModel):

@@ -53,6 +53,8 @@
       <button class="btn btn-primary mt-3" id="btn-harvest">
         <span id="harvest-label">Scrape jobs</span>
       </button>
+      <button class="btn btn-outline mt-2" id="btn-save-scope">Save as auto-run scope</button>
+      <p class="panel-hint mt-1" id="scope-hint">Auto-run is set to scrape everything.</p>
     </div>
 
     <!-- Panel: Auto-hide by keywords (hides jobs; restorable) -->
@@ -189,6 +191,7 @@
       <div class="toolbar-right">
         <span class="result-count" id="result-count"></span>
         <button class="btn btn-outline btn-sm" id="btn-export">CSV</button>
+        <button class="btn btn-ghost btn-sm" id="btn-reset" style="color:var(--red)" title="Delete every job listing. Keeps saved keyword rules, scrape scope, scheduler, resume masters, backups.">Full reset</button>
       </div>
     </div>
     <div class="next-hint" id="next-hint" style="display:none"></div>

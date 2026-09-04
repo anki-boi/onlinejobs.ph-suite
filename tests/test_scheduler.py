@@ -144,3 +144,32 @@ def test_start_spawns_daemon_thread_and_ticks():
     assert t.daemon
     t = scheduler.start(interval_sec=300, on_tick=lambda: None)
     assert t.daemon
+
+
+def test_run_once_honors_scrape_scope(conn):
+    """A saved scrape keyword limits what the auto-run harvests."""
+    from db.repos import settings as settings_repo
+    settings_repo.set(conn, "scrape_keyword", "python")
+    conn.commit()
+    events, publish = _record()
+    summary = scheduler.run_once(SchedulerClient(), conn, publish)
+    assert summary["inserted"] == 1
+    row = conn.execute("SELECT title FROM jobs").fetchone()
+    assert "Python" in row["title"]
+
+
+def test_run_once_auto_applies_saved_keywords(conn):
+    """Saved negative keyword auto-hides matching fresh stubs; no manual apply."""
+    from db.repos import settings as settings_repo
+    import json
+    settings_repo.set(conn, "negative_keywords", json.dumps(["python"]))
+    conn.commit()
+    events, publish = _record()
+    summary = scheduler.run_once(SchedulerClient(), conn, publish)
+    assert summary["inserted"] == 2
+    assert summary["auto_hidden"] == 1
+    by_title = {r["title"]: r["filter_hidden"] for r in conn.execute(
+        "SELECT title, filter_hidden FROM jobs")}
+    assert by_title["Python Developer (Jr)"] == 1
+    assert by_title["Digital / Social Media Marketing Director"] == 0
+    assert any(e == "alert" and d.get("type") == "keyword_filter" for e, d in events)

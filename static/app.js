@@ -557,6 +557,54 @@ async function exportCSV() {
 }
 
 // ── Event wiring ────────────────────────────────────────────────────────────
+// ── Saved keyword rules / auto-run scope / full reset ────────────────────
+async function loadSavedKeywords() {
+  try {
+    const b = await (await fetch('/api/keywords')).json();
+    if (b.positive.length || b.negative.length) {
+      state.posFilters = b.positive;
+      state.negFilters = b.negative;
+      renderChips();
+    }
+    if (b.still_filter_hidden) {
+      const h = $('#filter-hidden-hint');
+      h.style.display = 'block';
+      h.textContent = `${b.still_filter_hidden} job(s) auto-hidden by the saved rules`;
+    }
+  } catch {}
+}
+async function loadScrapeScope() {
+  try {
+    const s = await (await fetch('/api/scrape-scope')).json();
+    const parts = [s.keyword && `keywords: ${s.keyword}`,
+                   s.categories.length && `categories: ${s.categories.join(', ')}`,
+                   s.skills.length && `skills: ${s.skills.join(', ')}`].filter(Boolean);
+    $('#scope-hint').textContent = parts.length
+      ? `Auto-run scope: ${parts.join(' · ')}`
+      : 'Auto-run is set to scrape everything.';
+  } catch {}
+}
+async function saveScrapeScope() {
+  const r = await (await fetch('/api/scrape-scope', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      keyword: state.keywords.join(', '),
+      categories: state.categories,
+      skills: state.skills,
+    }),
+  })).json();
+  const what = r.keyword || r.categories.join(', ') || r.skills.join(', ') || 'everything';
+  toast(`Auto-run will now scrape: ${what}`, 'success');
+  loadScrapeScope();
+}
+async function resetAll() {
+  if (!confirm('Delete ALL job listings?\n\nKept: saved keyword rules, scrape scope, scheduler settings, resume masters, backups.')) return;
+  const b = await (await fetch('/api/jobs/reset', {method: 'POST'})).json();
+  toast(`Deleted ${b.deleted_jobs} job(s). Settings were kept.`, 'success');
+  loadStats(); loadJobs();
+}
+
 function init() {
   // Search keywords
   $('#kw-input').addEventListener('keydown', e=>{ if(e.key==='Enter'){e.preventDefault(); addChip('#kw-input',state.keywords);} });
@@ -573,6 +621,10 @@ function init() {
   // Apply filters
   $('#btn-apply-filters').addEventListener('click', applyFilters);
   $('#btn-restore-filters').addEventListener('click', restoreFilters);
+
+  // Auto-run scrape scope + full reset
+  $('#btn-save-scope').addEventListener('click', saveScrapeScope);
+  $('#btn-reset').addEventListener('click', resetAll);
 
   // Harvest
   $('#btn-harvest').addEventListener('click', runPipeline);
@@ -971,6 +1023,8 @@ document.addEventListener('DOMContentLoaded', ()=>{
   connectEvents();
   loadStats();
   loadJobs();
+  loadSavedKeywords();
+  loadScrapeScope();
   loadCategories();
   loadSkills();
   initResumePanel();
