@@ -6,29 +6,30 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:        #F4F6F5;
+  --bg:        #EEF2F3;
   --bg2:       #FFFFFF;
-  --bg3:       #EDF0EF;
-  --bg4:       #E3E8E5;
-  --border:    #D9DFDC;
-  --border2:   #C9D1CD;
+  --bg3:       #E5EBEA;
+  --bg4:       #DCE3E1;
+  --border:    #C7D0CC;
+  --border2:   #B2BEB9;
   --text:      #2C3F5E;
-  --text2:     #55708C;
-  --text3:     #8CA0B3;
+  --text2:     #4A617C;
+  --text3:     #7A90A4;
   --accent:        #2C3F5E;
   --accent2:       #C08B4A;
   --accent-dim:    rgba(44,63,94,0.08);
-  --green:       #6E8A63;
-  --green-dim:   rgba(167,184,157,0.28);
-  --red:         #A65B48;
-  --red-dim:     rgba(176,106,90,0.14);
-  --blue:        #5C87A5;
-  --blue-dim:    rgba(122,158,177,0.15);
+  --green:       #5F7F52;
+  --green-dim:   rgba(167,184,157,0.30);
+  --red:         #9E4E39;
+  --red-dim:     rgba(176,106,90,0.16);
+  --blue:        #4A7DA8;
+  --blue-dim:    rgba(122,158,177,0.18);
   --radius:      6px;
   --radius-lg:   10px;
   --shadow-lg:   0 8px 24px rgba(44,63,94,0.18);
   --mono:        'DM Mono', monospace;
-  --sans:        'Syne', sans-serif;
+  --sans:        'Inter', sans-serif;
+  --display:     'Syne', sans-serif;
 }
 
 html { font-size: 14px; height: 100%; overflow: hidden; }
@@ -50,7 +51,7 @@ header {
   position: sticky; top: 0; z-index: 100; flex-shrink: 0;
 }
 .header-left { display: flex; align-items: center; gap: 10px; }
-.logo { font-family: var(--mono); font-size: 1.1rem; font-weight: 500; color: var(--accent); }
+.logo { font-family: var(--display); font-size: 1.1rem; font-weight: 600; color: var(--accent); }
 .logo-label { font-size: 0.85rem; font-weight: 600; color: var(--text2); letter-spacing: 0.08em; text-transform: uppercase; }
 .header-stats { display: flex; gap: 12px; font-family: var(--mono); font-size: 0.75rem; }
 .stat-pill {
@@ -79,6 +80,7 @@ header {
 .panel:last-child { border-bottom: none; }
 .panel-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .panel-header h2 {
+  font-family: var(--display);
   font-size: 0.78rem; font-weight: 700;
   letter-spacing: 0.06em; text-transform: uppercase; color: var(--text);
 }
@@ -129,8 +131,8 @@ header {
   font-size: 0.72rem; font-family: var(--mono); font-weight: 500;
   border: 1px solid; cursor: default;
 }
-.chip-pos { background: var(--green-dim); border-color: rgba(110,138,99,0.35); color: var(--green); }
-.chip-neg { background: var(--red-dim); border-color: rgba(166,91,72,0.35); color: var(--red); }
+.chip-pos { background: var(--green-dim); border-color: rgba(95,127,82,0.4); color: var(--green); }
+.chip-neg { background: var(--red-dim); border-color: rgba(158,78,57,0.4); color: var(--red); }
 .chip-tag { background: var(--accent-dim); border-color: rgba(44,63,94,0.25); color: var(--text); }
 .chip-remove {
   background: none; border: none; color: inherit; cursor: pointer;
@@ -153,7 +155,7 @@ header {
 .btn-ghost { background: transparent; border-color: transparent; color: var(--text3); }
 .btn-ghost:hover:not(:disabled) { color: var(--text2); background: var(--bg3); border-color: var(--border); }
 .btn-danger { background: var(--red); border-color: var(--red); color: #fff; }
-.btn-danger:hover:not(:disabled) { background: #96523F; border-color: #96523F; }
+.btn-danger:hover:not(:disabled) { background: #8A422F; border-color: #8A422F; }
 .btn-sm { width: auto; padding: 5px 10px; font-size: 0.75rem; }
 
 .checkbox-label {
@@ -281,14 +283,14 @@ th.sorted-desc .th-label::after { content: '▼'; }
   font-size: 0.7rem; font-weight: 600; letter-spacing: 0.03em; white-space: nowrap;
 }
 .status-New         { background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(44,63,94,0.2); }
-.status-Interested  { background: var(--blue-dim);   color: var(--blue);   border: 1px solid rgba(92,135,165,0.35); }
-.status-Applied     { background: var(--blue-dim);   color: var(--blue);   border: 1px solid rgba(92,135,165,0.35); }
-.status-Interviewing{ background: var(--green-dim);  color: var(--green);  border: 1px solid rgba(110,138,99,0.35); }
-.status-Offer       { background: var(--green-dim);  color: var(--green);  border: 1px solid rgba(110,138,99,0.35); }
+.status-Interested  { background: var(--blue-dim);   color: var(--blue);   border: 1px solid rgba(74,125,168,0.45); }
+.status-Applied     { background: var(--blue-dim);   color: var(--blue);   border: 1px solid rgba(74,125,168,0.45); }
+.status-Interviewing{ background: var(--green-dim);  color: var(--green);  border: 1px solid rgba(95,127,82,0.45); }
+.status-Offer       { background: var(--green-dim);  color: var(--green);  border: 1px solid rgba(95,127,82,0.45); }
 .status-Hired       { background: var(--green);      color: #fff;          border: 1px solid var(--green); }
-.status-Rejected    { background: var(--red-dim);    color: var(--red);    border: 1px solid rgba(166,91,72,0.35); }
+.status-Rejected    { background: var(--red-dim);    color: var(--red);    border: 1px solid rgba(158,78,57,0.45); }
 .status-Hidden      { background: var(--bg4);        color: var(--text3);  border: 1px solid var(--border2); }
-.status-Hidden.hidden-by-filter { border-style: dashed; border-color: rgba(92,135,165,0.5); }
+.status-Hidden.hidden-by-filter { border-style: dashed; border-color: rgba(74,125,168,0.55); }
 
 /* ── Work type badges ── */
 .work-type { font-size: 0.7rem; font-family: var(--mono); }
@@ -341,12 +343,13 @@ th.sorted-desc .th-label::after { content: '▼'; }
 
 .detail-hidden-note {
   padding: 8px 10px; margin-bottom: 14px;
-  background: var(--blue-dim); border: 1px dashed rgba(92,135,165,0.5);
+  background: var(--blue-dim); border: 1px dashed rgba(74,125,168,0.55);
   border-radius: var(--radius); color: var(--blue); font-size: 0.78rem; line-height: 1.4;
 }
 
 .detail-section { margin-bottom: 18px; }
 .detail-section h3 {
+  font-family: var(--display);
   font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em;
   text-transform: uppercase; color: var(--text3);
   margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border);
