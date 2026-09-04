@@ -94,6 +94,9 @@ snapshot into `backups/`, keeping the last 7.
   format 25 + completeness 15, with matched/missing skills and rule-based
   suggestions. `auto=1` scores every profile and returns the best fit —
   the job drawer uses this, so the right track always gets your resume.
+- **ATS filter** — toolbar toggle “ATS ≥ 50” hides every job your best-fitting
+  profile scores below 50 on (`GET /api/jobs?min_ats=50`). Your 2,800-row list
+  collapsed to the 37 jobs actually worth your time.
 - **Tailor** — `POST /api/resume/tailor {"job_id": N, "auto": 1}`: the LLM
   rewrites the best-fitting profile for that job — rewrite & reorder only,
   never invents facts, written in the owner's tone (short, no buzzwords);
