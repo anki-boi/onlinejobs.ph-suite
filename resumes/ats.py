@@ -97,7 +97,7 @@ def score_resume(text: str, job: dict) -> dict:
     if PHONE_RE.search(text):
         f += 5
     sections = [w for w in SECTION_WORDS if re.search(rf"(?m)^[# ]*{w}[:#]?\s*$", text, re.I)]
-    f += int(10 * min(1, len(sections) / 3))  # 3 of {summary,experience,skills}
+    f += int(5 * min(1, len(sections) / 3))  # 3 of {summary,experience,skills} → max 25 total
     words = len(text.split())
     if 300 <= words <= 1500:
         f += 5

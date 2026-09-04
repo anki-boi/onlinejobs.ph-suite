@@ -52,7 +52,10 @@ class FollowUpUpdate(BaseModel):
 
 class ResumeUpdate(BaseModel):
     master: dict
+    profile: str = ""
 
 
 class TailorRequest(BaseModel):
     job_id: int
+    profile: str = ""
+    auto: int = 0

@@ -34,6 +34,7 @@ from db.repos import jobs as job_repo
 from db.repos import skills as skill_repo
 from resumes import ats as resume_ats_mod
 from resumes import render as resume_render
+from resumes import schema as resume_schema
 from resumes.schema import load_master, save_master, validate
 from resumes.tailor import LLMClient, tailor
 from scraper.client import OJClient
@@ -58,6 +59,11 @@ if _local_cfg.exists():
 
 _client: OJClient | None = None
 RESUME_PATH = dbconn.BASE_DIR / "resumes" / "master.json"
+MASTERS_PATH = dbconn.BASE_DIR / "resumes" / "masters.json"
+
+
+def _masters() -> dict:
+    return resume_schema.load_masters(MASTERS_PATH)
 
 # Default UA — a missing/empty config value must never override it with "".
 _DEFAULT_UA = (
@@ -227,8 +233,17 @@ def _job_dict_for_resume(row) -> dict:
 
 
 @app.get("/api/resume")
-def get_resume():
-    return load_master(RESUME_PATH)
+def get_resume(profile: str = ""):
+    try:
+        return resume_schema.get_profile(_masters(), profile)
+    except KeyError as e:
+        raise HTTPException(404, f"Unknown profile {e.args[0]!r}")
+
+
+@app.get("/api/resume/profiles")
+def get_resume_profiles():
+    d = _masters()
+    return {"default": d.get("default"), "profiles": list((d.get("profiles") or {}).keys())}
 
 
 @app.put("/api/resume")
@@ -236,19 +251,30 @@ def put_resume(body: ResumeUpdate):
     errs = validate(body.master)
     if errs:
         raise HTTPException(400, "; ".join(errs))
-    save_master(RESUME_PATH, body.master)
+    d = _masters()
+    name = (body.profile or d.get("default") or "master").strip()
+    d.setdefault("profiles", {})[name] = body.master
+    resume_schema.save_masters(MASTERS_PATH, d)
     return body.master
 
 
 @app.get("/api/resume/ats")
-def resume_ats(job_id: int):
-    """Deterministic ATS-style score of the current master resume vs one job."""
+def resume_ats(job_id: int, profile: str = "", auto: int = 0):
+    """Deterministic ATS-style score vs one job. auto=1 → best-fitting profile."""
     conn = get_db()
     row = job_repo.get_job(conn, job_id)
     if not row:
         raise HTTPException(404, "Job not found")
-    return resume_ats_mod.score_resume(resume_render.to_txt(load_master(RESUME_PATH)),
-                                   _job_dict_for_resume(row))
+    jd = _job_dict_for_resume(row)
+    d = _masters()
+    if auto:
+        name, score = resume_schema.best_profile_for_job(d, jd)
+        return {"profile": name, **score}
+    try:
+        doc = resume_schema.get_profile(d, profile)
+    except KeyError as e:
+        raise HTTPException(404, f"Unknown profile {e.args[0]!r}")
+    return resume_ats_mod.score_resume(resume_render.to_txt(doc), jd)
 
 
 @app.post("/api/resume/tailor")
@@ -261,27 +287,44 @@ def resume_tailor(body: TailorRequest):
     row = job_repo.get_job(conn, body.job_id)
     if not row:
         raise HTTPException(404, "Job not found")
-    master = load_master(RESUME_PATH)
-    tailored = tailor(master, _job_dict_for_resume(row), llm)
+    jd = _job_dict_for_resume(row)
+    d = _masters()
+    name = resume_schema.best_profile_for_job(d, jd)[0] if body.auto \
+        else (body.profile or d.get("default") or "").strip()
+    try:
+        doc = resume_schema.get_profile(d, name)
+    except KeyError as e:
+        raise HTTPException(404, f"Unknown profile {e.args[0]!r}")
+    tailored = tailor(doc, jd, llm)
     return {
+        "profile": name,
         "tailored": tailored,
-        "changed": tailored != master,
-        "score": resume_ats_mod.score_resume(resume_render.to_txt(tailored), _job_dict_for_resume(row)),
+        "changed": tailored != doc,
+        "score": resume_ats_mod.score_resume(resume_render.to_txt(tailored), jd),
     }
 
 
 @app.get("/api/resume/export")
-def resume_export(job_id: int, fmt: str = "docx", tailored: int = 0):
+def resume_export(job_id: int, fmt: str = "docx", tailored: int = 0, profile: str = "", auto: int = 0):
     conn = get_db()
     row = job_repo.get_job(conn, job_id)
     if not row:
         raise HTTPException(404, "Job not found")
-    m = load_master(RESUME_PATH)
+    jd = _job_dict_for_resume(row)
+    d = _masters()
+    if auto:
+        name = resume_schema.best_profile_for_job(d, jd)[0]
+    else:
+        name = profile or d.get("default")
+    try:
+        m = resume_schema.get_profile(d, name)
+    except KeyError as e:
+        raise HTTPException(404, f"Unknown profile {e.args[0]!r}")
     if tailored:
         llm = LLMClient.from_config(_cfg)
         if llm is None:
             raise HTTPException(503, "No LLM configured — add llm_base_url/llm_model to config.json")
-        m = tailor(m, _job_dict_for_resume(row), llm)
+        m = tailor(m, jd, llm)
     if fmt == "txt":
         body, ctype, ext = resume_render.to_txt(m), "text/plain; charset=utf-8", "txt"
     else:

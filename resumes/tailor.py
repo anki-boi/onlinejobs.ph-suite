@@ -22,6 +22,12 @@ and a job posting. Rewrite the master resume for THIS job:
   master resume. If the job requires something the resume lacks, do not add it.
 - Keep the exact JSON structure: basics{name,email,phone,location,summary},
   skills[str], work[{role,company,start,end,bullets[]}], education[{school,degree,year}].
+Voice (the owner's own writing rules):
+- Short and concise. Recruiters skim — no yapping, no filler.
+- No corporate buzzwords: never "leverage", "synergy", "passionate",
+  "results-driven", "proven track record".
+- Confident but not boastful; humble but not self-deprecating.
+- Concrete specifics beat adjectives: name the tool, the number, the outcome.
 Return ONLY the JSON object — no prose, no markdown fences."""
 
 

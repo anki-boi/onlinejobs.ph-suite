@@ -312,11 +312,11 @@ async function openDetail(id) {
     $('#detail-tailor-btn').disabled = false;
     $('#detail-tailor-btn').textContent = 'Tailor resume for this job';
 
-    // ATS score of your master resume vs this job (deterministic, instant)
+    // ATS score of your best-fitting resume profile vs this job (deterministic, instant)
     const atsEl = $('#detail-ats');
     atsEl.textContent = 'Scoring…';
     try {
-      const r = await api(`/api/resume/ats?job_id=${id}`);
+      const r = await api(`/api/resume/ats?job_id=${id}&auto=1`);
       $('#detail-ats-section').style.display = '';
       atsEl.textContent = formatAts(r);
     } catch(e) {
@@ -864,7 +864,8 @@ let resumeMaster = null;
 
 function formatAts(r) {
   const b = r.breakdown || {};
-  const lines = [`ATS score: ${r.total}/100`,
+  const prof = r.profile ? `Best-fit profile: ${r.profile}\n` : '';
+  const lines = [prof + `ATS score: ${r.total}/100`,
     `  skills ${b.skills||0}/40 · keywords ${b.keywords||0}/20 · format ${b.format||0}/25 · completeness ${b.completeness||0}/15`];
   if (r.matched_skills?.length) lines.push(`  matched: ${r.matched_skills.join(', ')}`);
   if (r.missing_skills?.length) lines.push(`  missing: ${r.missing_skills.join(', ')}`);
@@ -877,6 +878,16 @@ async function loadResumeStatus() {
     resumeMaster = await api('/api/resume');
     $('#resume-status').textContent =
       `Master resume: ${resumeMaster.basics?.name||'?'} (${(resumeMaster.skills||[]).length} skills)`;
+    // profile list
+    try {
+      const profs = await api('/api/resume/profiles');
+      const psel = $('#resume-profile-sel');
+      const curP = psel.value;
+      psel.innerHTML = '<option value="">Auto-pick best profile</option>' +
+        (profs.profiles||[]).map(p=>`<option value="${esc(p)}"${p===profs.default?' data-default="1"':''}>${esc(p)}${p===profs.default?' (default)':''}</option>`).join('');
+      if ([...psel.options].some(o=>o.value===curP)) psel.value = curP;
+    } catch(_)
+    {}
     const sel = $('#resume-job-sel');
     const cur = sel.value;
     const opts = [...tbody.querySelectorAll('tr[data-id]')].map(row=>{
@@ -895,6 +906,12 @@ async function loadResumeStatus() {
   }
 }
 
+// profile param for API calls: explicit selection or auto-pick
+function profileParam() {
+  const p = $('#resume-profile-sel').value;
+  return p ? `&profile=${encodeURIComponent(p)}` : '&auto=1';
+}
+
 function initResumePanel() {
   $('#resume-job-sel').addEventListener('change', () => {
     const has = !!$('#resume-job-sel').value;
@@ -904,7 +921,7 @@ function initResumePanel() {
   $('#btn-ats').addEventListener('click', async () => {
     const out = $('#resume-result');
     out.textContent = 'Scoring…';
-    try { out.textContent = formatAts(await api(`/api/resume/ats?job_id=${$('#resume-job-sel').value}`)); }
+    try { out.textContent = formatAts(await api(`/api/resume/ats?job_id=${$('#resume-job-sel').value}${profileParam()}`)); }
     catch(e) { out.textContent = e.message; }
   });
   $('#btn-tailor').addEventListener('click', async () => {
@@ -912,12 +929,16 @@ function initResumePanel() {
     btn.disabled = true;
     const out = $('#resume-result');
     out.textContent = 'Asking the LLM (can take a minute on local models)…';
+    const p = $('#resume-profile-sel').value;
+    const body = {job_id: Number($('#resume-job-sel').value)};
+    if (p) body.profile = p; else body.auto = 1;
     try {
-      const r = await api('/api/resume/tailor', {method:'POST', body:JSON.stringify({job_id: Number($('#resume-job-sel').value)})});
+      const r = await api('/api/resume/tailor', {method:'POST', body:JSON.stringify(body)});
       out.textContent = (r.changed ? '' : '(LLM returned the master unchanged — check llm config)\n') + formatAts(r.score);
       $('#resume-dl-row').style.display = '';
-      $('#dl-docx').href = `/api/resume/export?job_id=${$('#resume-job-sel').value}&tailored=1&fmt=docx`;
-      $('#dl-txt').href = `/api/resume/export?job_id=${$('#resume-job-sel').value}&tailored=1&fmt=txt`;
+      const pp = p ? `profile=${encodeURIComponent(p)}` : 'auto=1';
+      $('#dl-docx').href = `/api/resume/export?job_id=${$('#resume-job-sel').value}&tailored=1&fmt=docx&${pp}`;
+      $('#dl-txt').href = `/api/resume/export?job_id=${$('#resume-job-sel').value}&tailored=1&fmt=txt&${pp}`;
     } catch(e) { out.textContent = e.message; }
     btn.disabled = false;
   });
@@ -928,13 +949,14 @@ async function detailTailorClick() {
   const btn = $('#detail-tailor-btn');
   btn.disabled = true;
   btn.textContent = 'Tailoring…';
-  $('#detail-ats').textContent = 'Asking the LLM (can take a minute on local models)…';
+  $('#detail-ats').textContent = 'Asking the LLM for the best-fitting profile (can take a minute on local models)…';
   try {
-    const r = await api('/api/resume/tailor', {method:'POST', body:JSON.stringify({job_id: currentJob.id})});
+    const r = await api('/api/resume/tailor', {method:'POST', body:JSON.stringify({job_id: currentJob.id, auto: 1})});
     $('#detail-ats').textContent =
-      (r.changed ? '' : '(LLM returned the master unchanged — check llm config)\n') + formatAts(r.score);
+      (r.changed ? '' : '(LLM returned the master unchanged — check llm config)\n') + formatAts(r.score) +
+      `\nTailored with: ${r.profile}`;
     const dl = $('#detail-dl-docx');
-    dl.href = `/api/resume/export?job_id=${currentJob.id}&tailored=1&fmt=docx`;
+    dl.href = `/api/resume/export?job_id=${currentJob.id}&tailored=1&fmt=docx&auto=1`;
     dl.style.display = '';
   } catch(e) { $('#detail-ats').textContent = e.message; }
   btn.disabled = false;

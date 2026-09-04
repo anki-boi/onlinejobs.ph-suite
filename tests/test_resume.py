@@ -212,6 +212,7 @@ def test_to_docx_roundtrip():
 def test_resume_endpoints(client, conn, tmp_path, monkeypatch):
     mp = tmp_path / "master.json"
     monkeypatch.setattr("app.server.RESUME_PATH", mp)
+    monkeypatch.setattr("app.server.MASTERS_PATH", tmp_path / "masters.json")
     monkeypatch.setattr("app.server._cfg", {})  # no LLM in tests → tailor 503, no real network
     seed_master(mp)
 
@@ -243,3 +244,52 @@ def test_resume_endpoints(client, conn, tmp_path, monkeypatch):
     # tailor without LLM configured → 503 with clear message
     r = client.post("/api/resume/tailor", json={"job_id": c})
     assert r.status_code == 503
+
+
+def test_profiles_endpoint_and_auto_pick(client, conn, tmp_path, monkeypatch):
+    """Multiple named profiles; auto=1 deterministically picks the best fit."""
+    mp = tmp_path / "master.json"
+    monkeypatch.setattr("app.server.RESUME_PATH", mp)
+    monkeypatch.setattr("app.server.MASTERS_PATH", tmp_path / "masters.json")
+    monkeypatch.setattr("app.server._cfg", {})
+    seed_master(mp)  # becomes the default profile "master"
+
+    # Add a healthcare-flavored profile.
+    doc = json.loads(json.dumps(MASTER))
+    doc["basics"]["summary"] = "Registered Pharmacist, hospital and community pharmacy intern, " \
+                                "medical terminology, patient counseling, drug information, pharmacovigilance."
+    doc["skills"] = ["Medical Terminology", "Patient Counseling", "Pharmacovigilance", "IPQC", "cGMP"]
+    r = client.put("/api/resume", json={"master": doc, "profile": "healthcare"})
+    assert r.status_code == 200
+
+    r = client.get("/api/resume/profiles")
+    assert r.status_code == 200
+    assert set(r.json()["profiles"]) >= {"master", "healthcare"}
+
+    r = client.get("/api/resume", params={"profile": "healthcare"})
+    assert r.json()["skills"][0] == "Medical Terminology"
+
+    r = client.get("/api/resume", params={"profile": "nope"})
+    assert r.status_code == 404
+
+    # A bookkeeping job → the pharmacy profile should NOT win auto-pick.
+    c = conn.execute(
+        "INSERT INTO jobs (job_id, job_url, title, status, search_keyword, skills, salary, description, scrape_status) "
+        "VALUES (9001, 'http://x', 'Bookkeeper', 'Open', ?, ?, ?, ?, 'Open')",
+        (JOB["keywords"], json.dumps(JOB["skills"]), JOB["salary"], JOB["description"]),
+    ).lastrowid
+    conn.commit()
+    r = client.get("/api/resume/ats", params={"job_id": c, "auto": 1})
+    assert r.status_code == 200
+    body = r.json()
+    assert set(body) >= {"profile", "total"}
+    assert body["profile"] != "healthcare"
+
+    # tailor auto=1 with a mocked LLM reports the auto-picked profile.
+    class _L:
+        def chat(self, messages):
+            return json.dumps(MASTER)
+    monkeypatch.setattr("app.server.LLMClient.from_config", staticmethod(lambda cfg: _L()))
+    r = client.post("/api/resume/tailor", json={"job_id": c, "auto": 1})
+    assert r.status_code == 200
+    assert r.json()["profile"] and r.json()["score"]["total"] > 0
