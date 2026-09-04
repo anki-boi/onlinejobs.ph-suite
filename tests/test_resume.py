@@ -39,7 +39,7 @@ def conn(client):
 MASTER = {
     "basics": {
         "name": "Juan Garcia",
-        "email": "jey@example.com",
+        "email": "juan.garcia@example.com",
         "phone": "+63 917 000 0000",
         "location": "Cebu City, PH",
         "summary": "Virtual assistant with 3 years of experience in admin support, "
@@ -109,7 +109,7 @@ def test_seed_and_roundtrip(tmp_path):
 
 def test_resume_to_text_contains_all_parts():
     t = resume_to_text(MASTER)
-    for needle in ("Juan Garcia", "jey@example.com", "Bookkeeping",
+    for needle in ("Juan Garcia", "juan.garcia@example.com", "Bookkeeping",
                    "Salhab Pharmacy", "Process 100+ daily patient orders",
                    "CTC University"):
         assert needle in t, needle
@@ -235,7 +235,7 @@ def test_resume_endpoints(client, conn, tmp_path, monkeypatch):
 
     r = client.get("/api/resume/export", params={"job_id": c, "fmt": "txt"})
     assert r.status_code == 200
-    assert "Your Name" in r.text  # seeded placeholder
+    assert "Juan Garcia" in r.text  # seeded placeholder
 
     r = client.get("/api/resume/export", params={"job_id": c, "fmt": "docx"})
     assert r.status_code == 200
@@ -335,7 +335,7 @@ def test_resume_form_roundtrip_template(client, tmp_path, monkeypatch):
 
     r = client.get("/api/resume")
     assert r.status_code == 200
-    assert r.json()["basics"]["name"] == "Your Full Name"  # the starter placeholder
+    assert r.json()["basics"]["name"] == "Juan Garcia"  # the starter placeholder
 
     # What the form submits: edited basics + skills, work/education carried through unchanged.
     base = r.json()

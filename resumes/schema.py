@@ -53,8 +53,8 @@ def seed_master(path) -> dict:
     """First-run placeholder — realistic shape, content to be replaced."""
     m = {
         "basics": {
-            "name": "Your Name",
-            "email": "you@example.com",
+            "name": "Juan Garcia",
+            "email": "juan.garcia@example.com",
             "phone": "+63 900 000 0000",
             "location": "Cebu City, PH",
             "summary": "Virtual assistant with experience in admin support, bookkeeping, "
