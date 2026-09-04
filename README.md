@@ -57,6 +57,31 @@ Configuration lives in `config.json`:
 - Hidden jobs stay in the DB for dedup — they won't resurface in future scrapes.
 - Export the current view to CSV from the toolbar.
 
+## Auto-run & alerts
+
+The **Auto-run** panel (sidebar) keeps the tracker fresh on its own:
+
+- **Auto-run enabled** + interval (1–24 h, default 4 h) — a daemon thread in the
+  server harvests the whole board and re-checks new/stale jobs on schedule.
+  Manual *Scrape*/*Check* and auto-run never run at once (shared lock).
+- **Enable desktop alerts** — one click for Notification permission; you then get
+  a desktop notification for every new-job batch, job closure, salary change, and
+  follow-up that's due, delivered over the SSE stream (`/api/events`).
+
+The app starts at Windows logon (`JobHunter` scheduled task → `pythonw main.py`),
+and `JobHunter-Backup` runs `scripts/backup.py` daily at 03:00 — a `VACUUM INTO`
+snapshot into `backups/`, keeping the last 7.
+
+## Data quality
+
+- **Reposts** — same title re-posted by the same employer gets a `↻ repost`
+  badge (points at the original). *Hide reposts* toolbar toggle filters them.
+- **Salary** — free-text salary is parsed into monthly min/max and shown as a
+  `₱…/mo` / `US$…/mo` chip (hourly×160, weekly×4.33, daily×30, annual÷12).
+- **Parse watchdog** — if the search page stops yielding job boxes while the
+  site claims results, the run logs a `structure change` alert instead of
+  silently recording zero.
+
 ## Files
 
 | Path | Purpose |
