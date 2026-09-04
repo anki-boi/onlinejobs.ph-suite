@@ -16,9 +16,16 @@ class PipelineRequest(BaseModel):
 
 
 class CheckRequest(BaseModel):
-    workers: int = 3
+    workers: int | None = None   # None → use config.json enrich_workers
     recheck_all: bool = False
     max_age_days: int = 7
+
+
+# ── Auto-run ────────────────────────────────────────────────────────────────
+
+class ScheduleUpdate(BaseModel):
+    enabled: bool | None = None
+    interval_hours: int | None = None
 
 
 # ── Keyword filters (post-enrichment) ───────────────────────────────────────

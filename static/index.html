@@ -99,6 +99,29 @@
       </button>
     </div>
 
+    <!-- Auto-run -->
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Auto-run</h2>
+      </div>
+      <p class="panel-hint">Scrapes and re-checks on a timer while this page is open or not — alerts land as desktop notifications.</p>
+      <label class="checkbox-label mb-2">
+        <input type="checkbox" id="auto-run-enabled" checked> Auto-run enabled
+      </label>
+      <label class="checkbox-label mb-2">
+        Every <select id="auto-run-interval">
+          <option value="1">1h</option>
+          <option value="2">2h</option>
+          <option value="4" selected>4h</option>
+          <option value="8">8h</option>
+          <option value="12">12h</option>
+          <option value="24">24h</option>
+        </select>
+      </label>
+      <button class="btn btn-outline" id="btn-notify">Enable desktop alerts 🔔</button>
+      <div id="auto-run-status" class="log-line"></div>
+    </div>
+
     <!-- Stop control -->
     <div class="panel">
       <button class="btn btn-danger" id="btn-stop" disabled>Stop current run</button>

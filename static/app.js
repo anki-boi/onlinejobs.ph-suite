@@ -767,10 +767,76 @@ function openColFilter(col, th) {
 
   // Export
   $('#btn-export').addEventListener('click', exportCSV);
+
+  // Auto-run
+  $('#auto-run-enabled').addEventListener('change', async (e) => {
+    try { await api('/api/schedule', { method:'POST', body: JSON.stringify({ enabled: e.target.checked }) }); }
+    catch (err) { toast(err.message, 'error'); }
+  });
+  $('#auto-run-interval').addEventListener('change', async (e) => {
+    try { await api('/api/schedule', { method:'POST', body: JSON.stringify({ interval_hours: +e.target.value }) }); }
+    catch (err) { toast(err.message, 'error'); }
+  });
+  $('#btn-notify').addEventListener('click', async () => {
+    if (!('Notification' in window)) { toast('Notifications not supported in this browser', 'error'); return; }
+    const p = await Notification.requestPermission();
+    if (p === 'granted') {
+      toast('Desktop alerts on', 'success');
+      new Notification('Job Hunter', { body: 'You’ll get desktop alerts for new jobs, closures, and follow-ups.', tag: 'jobhunter' });
+      $('#btn-notify').textContent = 'Desktop alerts: on ✓';
+    } else {
+      toast(p === 'denied' ? 'Notifications blocked — allow them in site settings' : 'Notification permission not granted', 'error');
+    }
+  });
+  syncAutoRunUI();
+}
+
+// ── Auto-run status + server-pushed events ─────────────────────────────
+async function syncAutoRunUI() {
+  try {
+    const s = await api('/api/schedule');
+    $('#auto-run-enabled').checked = s.enabled;
+    $('#auto-run-interval').value = String(s.interval_hours || 4);
+    const st = $('#auto-run-status');
+    if (st) st.textContent = s.last_run
+      ? `last run ${s.last_run}${s.last_error ? ` — ${s.last_error}` : ''}`
+      : 'never run yet';
+  } catch (_) { /* server not up yet */ }
+}
+
+function desktopNotify(title, body) {
+  if ('Notification' in window && Notification.permission === 'granted') {
+    try { new Notification(title, { body: body || '', tag: 'jobhunter' }); } catch (_) {}
+  }
+}
+
+function connectEvents() {
+  const es = new EventSource('/api/events');
+  es.addEventListener('new_jobs', (e) => {
+    let d = {}; try { d = JSON.parse(e.data); } catch (_) {}
+    toast(`🆕 ${d.count} new job(s)`, 'success');
+    desktopNotify(`🆕 ${d.count} new job(s) on OJ.ph`, (d.titles || []).slice(0, 3).join(' · '));
+    loadStats(); loadJobs();
+  });
+  es.addEventListener('alert', (e) => {
+    let d = {}; try { d = JSON.parse(e.data); } catch (_) {}
+    const msg = d.message || d.type || 'alert';
+    toast(msg, d.type === 'error' ? 'error' : 'info');
+    desktopNotify(`Job Hunter: ${d.type || 'alert'}`, msg);
+    log(`⚠ ${msg}`, 'log-error');
+  });
+  es.addEventListener('schedule_done', (e) => {
+    let d = {}; try { d = JSON.parse(e.data); } catch (_) {}
+    const st = $('#auto-run-status');
+    if (st) st.textContent = `last run: +${d.inserted||0} new · ${d.closed||0} closed · ${d.errors||0} err`;
+    loadStats(); loadJobs();
+  });
+  es.onerror = () => { syncAutoRunUI(); };
 }
 
 document.addEventListener('DOMContentLoaded', ()=>{
   init();
+  connectEvents();
   loadStats();
   loadJobs();
   loadCategories();

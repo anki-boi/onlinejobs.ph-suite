@@ -25,6 +25,9 @@ _COLUMN_RENAMES = [
 
 def migrate(conn) -> None:
     """Detect old schema and migrate data to new columns."""
+    # v3: key/value table for auto-run state (new DBs already have it via SCHEMA)
+    conn.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)")
+
     existing = _existing_columns(conn, "jobs")
 
     # Add any missing new columns

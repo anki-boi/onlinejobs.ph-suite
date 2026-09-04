@@ -19,7 +19,7 @@ from db.migrate import migrate
 
 # Bump when the migration in db/migrate.py changes. DBs at a lower version
 # are migrated exactly once, on the next init_db(); new DBs start at this version.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -68,6 +68,11 @@ SCHEMA = """
             parent_id     INTEGER,
             slug          TEXT,
             category_path TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS app_settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT
         );
 
         CREATE INDEX IF NOT EXISTS idx_jobs_status       ON jobs(status);

@@ -582,3 +582,55 @@ class TestCheckDomainGuard:
         assert res.status_code == 200
         assert [j[0] for j in seen["jobs"]] == [good]  # test.com never re-checked
         assert "test.com" not in res.text
+
+
+class TestSchedule:
+    def test_defaults(self, client):
+        res = client.get("/api/schedule")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["enabled"] is True
+        assert data["interval_hours"] == 4
+        assert data["last_run"] == ""
+        assert data["last_error"] == ""
+        assert data["running"] is False
+
+    def test_disable(self, client):
+        res = client.post("/api/schedule", json={"enabled": False})
+        assert res.status_code == 200
+        assert client.get("/api/schedule").json()["enabled"] is False
+
+    def test_interval(self, client):
+        res = client.post("/api/schedule", json={"interval_hours": 2})
+        assert res.status_code == 200
+        assert client.get("/api/schedule").json()["interval_hours"] == 2
+
+    def test_bad_interval_rejected(self, client):
+        assert client.post("/api/schedule", json={"interval_hours": 0}).status_code == 400
+        assert client.post("/api/schedule", json={"interval_hours": "x"}).status_code == 422
+        # still 4
+        assert client.get("/api/schedule").json()["interval_hours"] == 4
+
+
+class TestEventsSSE:
+    def test_stream_starts_with_connected(self, client):
+        # TestClient's in-memory transport coalesces infinite streams, so
+        # drive the endpoint's generator directly (uvicorn delivers each
+        # send() as its own socket chunk to real EventSource clients).
+        from app.server import events_stream
+        resp = events_stream()
+        import asyncio
+        first = asyncio.run(resp.body_iterator.__anext__())
+        asyncio.run(resp.body_iterator.aclose())
+        assert "event: connected" in first
+
+    def test_hub_publish_reaches_subscriber(self, client):
+        from app import events as hub
+        q = hub.subscribe()
+        try:
+            hub.publish("new_jobs", {"count": 2, "titles": ["A", "B"]})
+            msg = q.get(timeout=1)
+            assert "event: new_jobs" in msg
+            assert "\"count\": 2" in msg
+        finally:
+            hub.unsubscribe(q)

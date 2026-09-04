@@ -76,6 +76,8 @@ def main():
 
     # Run server
     import uvicorn
+    from app import scheduler
+    scheduler.start()  # daemon thread: auto-run harvest+enrich on the configured interval
     uvicorn.run(
         "app.server:app",
         host=args.host,

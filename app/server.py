@@ -20,9 +20,13 @@ from app.schemas import (
     KeywordFilter,
     NotesUpdate,
     PipelineRequest,
+    ScheduleUpdate,
     StatusUpdate,
 )
 from app.sse import sse
+from app import events as events_hub
+from app import pipeline_apply
+from app import scheduler
 import db.connection as dbconn
 from db.repos import jobs as job_repo
 from db.repos import skills as skill_repo
@@ -168,6 +172,58 @@ def stats():
     return job_repo.get_stats(get_db())
 
 
+# ── Auto-run ────────────────────────────────────────────────────────────────
+
+@app.get("/api/schedule")
+def get_schedule():
+    from db.repos import settings as settings_repo
+    conn = get_db()
+    return {
+        "enabled": settings_repo.get(conn, "auto_run_enabled", "1") == "1",
+        "interval_hours": int(settings_repo.get(conn, "auto_run_interval_hours",
+                                                str(scheduler.DEFAULT_INTERVAL_HOURS))
+                              or scheduler.DEFAULT_INTERVAL_HOURS),
+        "last_run": settings_repo.get(conn, "last_run", ""),
+        "last_error": settings_repo.get(conn, "last_error", ""),
+        "next_run": settings_repo.get(conn, "next_run", ""),
+        "running": scheduler.is_running(),
+    }
+
+
+@app.post("/api/schedule")
+def set_schedule(body: ScheduleUpdate):
+    from db.repos import settings as settings_repo
+    conn = get_db()
+    if body.enabled is not None:
+        settings_repo.set(conn, "auto_run_enabled", "1" if body.enabled else "0")
+    if body.interval_hours is not None:
+        if not 1 <= body.interval_hours <= 24:
+            raise HTTPException(400, "interval_hours must be 1-24")
+        settings_repo.set(conn, "auto_run_interval_hours", body.interval_hours)
+    return get_schedule()
+
+
+@app.get("/api/events")
+def events_stream():
+    """Server-pushed events (auto-run alerts, new jobs). One open stream per tab;
+    browsers auto-reconnect, the hub drops dead subscribers."""
+    import queue as _queue
+    q = events_hub.subscribe()
+
+    def generate():
+        try:
+            yield sse("connected", "")
+            while True:
+                try:
+                    yield q.get(timeout=15)
+                except _queue.Empty:
+                    yield sse("ping", "")  # keep proxies/tabs from dropping us
+        finally:
+            events_hub.unsubscribe(q)
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
 # ── Skills API ──────────────────────────────────────────────────────────────
 
 @app.get("/api/skills")
@@ -247,42 +303,31 @@ def run_pipeline(body: PipelineRequest):
     existing_ids = job_repo.get_existing_job_ids(conn)
 
     def generate():
-        new_job_ids: list[int] = []
-        for event in harvest(
-            client,
-            keyword=keyword,
-            categories=categories or None,
-            skill_ids=skill_ids or None,
-            posted_since=posted_since,
-            existing_ids=existing_ids,
-        ):
-            if event.type == "log":
-                yield sse("log", event.message)
-            elif event.type == "error":
-                yield sse("error", event.message)
-            elif event.type == "harvest_result":
-                inserted = 0
-                for stub_data in event.data.get("stubs", []):
-                    row_id, is_new = job_repo.upsert_stub(
-                        conn,
-                        job_id=stub_data.get("job_id") or 0,
-                        job_url=stub_data["job_url"],
-                        title=stub_data.get("title"),
-                        work_type=stub_data.get("work_type"),
-                        company=stub_data.get("company"),
-                        posted_date=stub_data.get("posted_date"),
-                        salary=stub_data.get("salary"),
-                        location=stub_data.get("location"),
-                        hours=stub_data.get("hours"),
-                        skills=stub_data.get("skills") or None,
-                        search_keyword=keyword or None,
-                        search_category=event.data.get("category"),
-                    )
-                    if is_new:
-                        inserted += 1
+        # Shared lock with the auto-run scheduler: one scrape at a time.
+        if not scheduler.pipeline_lock.acquire(blocking=False):
+            yield sse("error", "Another run is in progress (auto-run or another tab) — try again shortly")
+            yield sse("done", "busy")
+            return
+        try:
+            new_job_ids: list[int] = []
+            for event in harvest(
+                client,
+                keyword=keyword,
+                categories=categories or None,
+                skill_ids=skill_ids or None,
+                posted_since=posted_since,
+                existing_ids=existing_ids,
+            ):
+                if event.type == "log":
+                    yield sse("log", event.message)
+                elif event.type == "error":
+                    yield sse("error", event.message)
+                elif event.type == "harvest_result":
+                    inserted, new_items = pipeline_apply.apply_harvest(conn, event)
+                    # Emit each new job immediately for real-time UI
+                    for stub_data, row_id in new_items:
                         if stub_data.get("job_id"):
                             new_job_ids.append(row_id)
-                        # Emit each new job immediately for real-time UI
                         yield sse("harvest_stub", {
                             "row_id": row_id,
                             "job_id": stub_data.get("job_id"),
@@ -294,54 +339,43 @@ def run_pipeline(body: PipelineRequest):
                             "skills": stub_data.get("skills"),
                             "job_url": stub_data.get("job_url"),
                         })
-                yield sse("harvest_done", {"inserted": inserted, "total": len(event.data.get("stubs", []))})
-            elif event.type == "summary":
-                yield sse("harvest_summary", event.data)
-
-        if client.stopped:
-            yield sse("done", "stopped")
-            return
-
-        # Phase 2: Enrich new jobs
-        if new_job_ids:
-            rows = conn.execute(
-                f"SELECT id, job_url FROM jobs WHERE id IN ({','.join('?' * len(new_job_ids))})",
-                new_job_ids,
-            ).fetchall()
-            jobs_to_enrich = [(r["id"], r["job_url"]) for r in rows]
-        else:
-            jobs_to_enrich = []
-            yield sse("log", "No new jobs — skipping enrichment")
-
-        if jobs_to_enrich:
-            workers = _cfg.get("enrich_workers", 3)
-            for event in enrich(client, jobs_to_enrich, workers=workers):
-                if event.type == "log":
-                    yield sse("log", event.message)
-                elif event.type == "error":
-                    yield sse("error", event.message)
-                elif event.type == "enrich_result":
-                    d = event.data
-                    if "error" not in d:
-                        job_repo.enrich_job(
-                            conn, d["row_id"],
-                            title=d.get("title"),
-                            company=d.get("company"),
-                            description=d.get("description"),
-                            salary=d.get("salary"),
-                            hours_per_week=d.get("hours_per_week"),
-                            work_type=d.get("work_type"),
-                            date_updated=d.get("date_updated"),
-                            skills=d.get("skills") or None,
-                            employer_id=d.get("employer_id"),
-                            is_closed=d.get("is_closed", False),
-                            close_reason=d.get("close_reason"),
-                        )
-                    yield sse("enrich_done", {k: v for k, v in d.items() if k != "description"})
+                    yield sse("harvest_done", {"inserted": inserted, "total": len(event.data.get("stubs", []))})
                 elif event.type == "summary":
-                    yield sse("enrich_summary", event.data)
+                    yield sse("harvest_summary", event.data)
 
-        yield sse("done", "complete")
+            if client.stopped:
+                yield sse("done", "stopped")
+                return
+
+            # Phase 2: Enrich new jobs
+            if new_job_ids:
+                rows = conn.execute(
+                    f"SELECT id, job_url FROM jobs WHERE id IN ({','.join('?' * len(new_job_ids))})",
+                    new_job_ids,
+                ).fetchall()
+                jobs_to_enrich = [(r["id"], r["job_url"]) for r in rows]
+            else:
+                jobs_to_enrich = []
+                yield sse("log", "No new jobs — skipping enrichment")
+
+            if jobs_to_enrich:
+                workers = _cfg.get("enrich_workers", 3)
+                for event in enrich(client, jobs_to_enrich, workers=workers):
+                    if event.type == "log":
+                        yield sse("log", event.message)
+                    elif event.type == "error":
+                        yield sse("error", event.message)
+                    elif event.type == "enrich_result":
+                        d = event.data
+                        if pipeline_apply.apply_enrich(conn, d):
+                            pass
+                        yield sse("enrich_done", {k: v for k, v in d.items() if k != "description"})
+                    elif event.type == "summary":
+                        yield sse("enrich_summary", event.data)
+
+            yield sse("done", "complete")
+        finally:
+            scheduler.pipeline_lock.release()
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -373,38 +407,31 @@ def run_check(body: CheckRequest):
         jobs_to_check = [t for t in jobs_to_check if t[1].startswith(prefix)]
 
     def generate():
-        if not jobs_to_check:
-            yield sse("log", "No jobs need checking")
-            yield sse("done", "nothing to check")
+        if not scheduler.pipeline_lock.acquire(blocking=False):
+            yield sse("error", "Another run is in progress (auto-run or another tab) — try again shortly")
+            yield sse("done", "busy")
             return
+        try:
+            if not jobs_to_check:
+                yield sse("log", "No jobs need checking")
+                yield sse("done", "nothing to check")
+                return
 
-        workers = body.workers or _cfg.get("enrich_workers", 3)
-        for event in enrich(client, jobs_to_check, workers=workers):
-            if event.type == "log":
-                yield sse("log", event.message)
-            elif event.type == "error":
-                yield sse("error", event.message)
-            elif event.type == "enrich_result":
-                d = event.data
-                if "error" not in d:
-                    job_repo.enrich_job(
-                        conn, d["row_id"],
-                        title=d.get("title"),
-                        company=d.get("company"),
-                        description=d.get("description"),
-                        salary=d.get("salary"),
-                        hours_per_week=d.get("hours_per_week"),
-                        work_type=d.get("work_type"),
-                        date_updated=d.get("date_updated"),
-                        skills=d.get("skills") or None,
-                        employer_id=d.get("employer_id"),
-                        is_closed=d.get("is_closed", False),
-                        close_reason=d.get("close_reason"),
-                    )
-                yield sse("enrich_done", {k: v for k, v in d.items() if k != "description"})
-            elif event.type == "summary":
-                yield sse("enrich_summary", event.data)
-        yield sse("done", "complete")
+            workers = body.workers or _cfg.get("enrich_workers", 3)
+            for event in enrich(client, jobs_to_check, workers=workers):
+                if event.type == "log":
+                    yield sse("log", event.message)
+                elif event.type == "error":
+                    yield sse("error", event.message)
+                elif event.type == "enrich_result":
+                    d = event.data
+                    pipeline_apply.apply_enrich(conn, d)
+                    yield sse("enrich_done", {k: v for k, v in d.items() if k != "description"})
+                elif event.type == "summary":
+                    yield sse("enrich_summary", event.data)
+            yield sse("done", "complete")
+        finally:
+            scheduler.pipeline_lock.release()
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 
