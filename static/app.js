@@ -9,6 +9,7 @@ const state = {
   posFilters: [],      // positive keyword filters
   negFilters: [],      // negative keyword filters
   includeHidden: false,
+  hideReposts: false,
   total: 0,
   scraping: false,
   activeRun: null,        // 'harvest' | 'check' | null — drives button phase labels
@@ -139,20 +140,25 @@ function jobRowHtml(j) {
   const wtCls = j.work_type ? j.work_type.replace(/ /g,'') : '';
   const skillsArr = j.skills ? (Array.isArray(j.skills) ? j.skills : String(j.skills).split(',')) : [];
   const skillsHtml = skillsArr.slice(0,3).map(s=>`<span class="skill-tag">${esc(String(s).trim())}</span>`).join('');
+  const repostBadge = j.repost_of ? '<span class="repost-badge" title="Same title posted again by the same employer — see the original">↻ repost</span>' : '';
+  // Structured salary chip (currency guessed from the raw string: $ = USD, else PHP)
+  const salChip = j.salary_min != null
+    ? `<div class="salary-chip">${(j.salary||'').includes('$') ? 'US$' : '₱'}${j.salary_min===j.salary_max ? j.salary_min.toLocaleString() : j.salary_min.toLocaleString()+'–'+j.salary_max.toLocaleString()}/mo</div>`
+    : '';
   // Two kinds of hidden: yours (solid) vs keyword auto-hide (dashed, remembers what it was)
   const badge = j.status === 'Hidden'
     ? (j.filter_hidden
         ? `<span class="status-badge status-Hidden hidden-by-filter" title="Auto-hidden by keyword rules — was ${esc(j.pre_filter_status||'New')}">Hidden · auto</span>`
         : `<span class="status-badge status-Hidden" title="Hidden by you">Hidden</span>`)
     : `<span class="status-badge status-${j.status}">${j.status}</span>`;
-  return `<tr data-id="${j.id}" class="${j.status==='Hidden'?'hidden-row':''}">
+  return `<tr data-id="${j.id}" data-repost="${j.repost_of||0}" class="${j.status==='Hidden'?'hidden-row':''}">
     <td><span class="scrape-dot ${dot}" title="${dotTitle}"></span></td>
     <td>${badge}</td>
-    <td><div class="cell-title">${esc(j.title)||'<em class="text-muted">untitled</em>'}</div>${skillsHtml?`<div class="mt-1">${skillsHtml}</div>`:''}</td>
+    <td><div class="cell-title">${esc(j.title)||'<em class="text-muted">untitled</em>'} ${repostBadge}</div>${skillsHtml?`<div class="mt-1">${skillsHtml}</div>`:''}</td>
     <td class="cell-mono">${esc(j.company||'')}</td>
     <td class="cell-date">${fmtDate(j.posted_date)||fmtDate(j.date_found)}</td>
     <td><span class="work-type ${wtCls}">${wt}</span></td>
-    <td class="cell-mono">${esc(j.salary||'')||'<span class="text-muted">—</span>'}</td>
+    <td class="cell-mono">${esc(j.salary||'')||'<span class="text-muted">—</span>'}${salChip}</td>
     <td class="cell-mono">${esc(j.hours_per_week||'')}</td>
   </tr>`;
 }
@@ -206,6 +212,8 @@ function applyVisibleFilter() {
     const allText = title + ' ' + company + ' ' + skillsText;
     
     let show = true;
+    // Reposts (same title + employer, already listed) hideable on demand
+    if (state.hideReposts && row.dataset.repost) show = false;
     // If skills selected, row must match at least one
     if (activeSkills.length) {
       show = activeSkills.some(sk => allText.includes(sk));
@@ -568,6 +576,7 @@ function init() {
     loadJobs();
   });
   $('#filter-hidden').addEventListener('change', e=>{state.includeHidden=e.target.checked;loadJobs();});
+  $('#filter-reposts').addEventListener('change', e=>{state.hideReposts=e.target.checked;applyVisibleFilter();});
   $('#filter-has-salary').addEventListener('change', e=>{
     state.hasSalaryOnly = e.target.checked;
     updateFunnelIndicators();

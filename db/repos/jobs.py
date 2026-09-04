@@ -13,6 +13,29 @@ STATUSES = [
 SCRAPE_STATUSES = ["Open", "Closed", ""]
 
 
+def norm_title(title: str | None) -> str:
+    """Case/punctuation-insensitive title for repost matching."""
+    import re
+    return re.sub(r"[^a-z0-9]+", "", (title or "").lower())
+
+
+def _find_repost_origin(conn, row_id: int, title: str, employer_id: int) -> int | None:
+    """Earliest non-repost row with the same normalized title + employer.
+    # ponytail: scans the employer's rows in Python (dozens per employer,
+    # not thousands); a norm_title column if it ever gets slow."""
+    nt = norm_title(title)
+    if not nt:
+        return None
+    rows = conn.execute(
+        "SELECT id FROM jobs WHERE employer_id = ? AND id != ? AND repost_of IS NULL AND title IS NOT NULL",
+        (employer_id, row_id),
+    ).fetchall()
+    for r in rows:
+        if norm_title(conn.execute("SELECT title FROM jobs WHERE id=?", (r["id"],)).fetchone()[0]) == nt:
+            return r["id"]
+    return None
+
+
 # Columns the API may sort by (Excel-style header sorting).
 SORTABLE = {
     "title", "company", "salary", "location", "hours_per_week", "work_type",
@@ -275,9 +298,23 @@ def enrich_job(
     if skills is not None:
         fields["skills"] = ", ".join(skills)
 
+    # Structured salary (monthly min/max) follows the salary text
+    if salary is not None:
+        from scraper.salary import parse_salary
+        mn, mx, _cur = parse_salary(salary)
+        fields["salary_min"] = mn
+        fields["salary_max"] = mx
+
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     vals = list(fields.values()) + [row_id]
     conn.execute(f"UPDATE jobs SET {set_clause} WHERE id = ?", vals)
+
+    # Repost detection needs the effective (possibly pre-existing) title + employer
+    row = conn.execute("SELECT title, employer_id FROM jobs WHERE id=?", (row_id,)).fetchone()
+    if row and row["title"] and row["employer_id"]:
+        origin = _find_repost_origin(conn, row_id, row["title"], row["employer_id"])
+        conn.execute("UPDATE jobs SET repost_of=? WHERE id=?", (origin, row_id))
+
     conn.commit()
 
 

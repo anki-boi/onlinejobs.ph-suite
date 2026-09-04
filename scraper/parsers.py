@@ -54,10 +54,16 @@ class JobDetail:
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 def _clean(text: str | None) -> str | None:
-    """Collapse whitespace, strip. Return None if empty."""
+    """Collapse whitespace, strip. Return None if empty.
+    Also strips escaped-HTML artifacts the site leaves in titles
+    (e.g. '<email class=...>' rendered from &lt; in the markup)."""
     if not text:
         return None
     s = re.sub(r"\s+", " ", text).strip()
+    # ponytail: strips <word ...> / </word ...> fragments only; a title that
+    # legitimately contains '<' followed by a word would be trimmed (never seen)
+    s = re.sub(r"</?[a-zA-Z][^>]*>?\s?", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
     return s or None
 
 

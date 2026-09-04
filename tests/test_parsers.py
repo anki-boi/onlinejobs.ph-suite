@@ -139,6 +139,20 @@ class TestParseSearchResults:
         assert stubs[0].title == "Plain Title"
         assert stubs[0].work_type is None
 
+    def test_escaped_html_in_title_stripped(self):
+        # real data: OJ.ph puts escaped HTML ("&lt;email class=...&gt;") inside titles
+        html = """
+        <div class="jobpost-cat-box latest-job-post">
+          <h4>&lt;email class=&quot;new&quot;&gt;Fullstack &lt;/email class=&quot;new&quot;&gt; Developer</h4>
+          <p data-temp="2026-01-01 00:00:00">NoCompany • Posted on 2026-01-01</p>
+          <a href="/jobseekers/job/fd-88888">Apply</a>
+        </div>
+        """
+        stubs = parse_search_results(html)
+        assert len(stubs) == 1
+        assert stubs[0].title == "Fullstack Developer"
+        assert "<" not in stubs[0].title
+
     def test_empty_page(self):
         stubs = parse_search_results("<html><body><p>No jobs</p></body></html>")
         assert stubs == []

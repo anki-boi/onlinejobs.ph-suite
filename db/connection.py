@@ -19,7 +19,7 @@ from db.migrate import migrate
 
 # Bump when the migration in db/migrate.py changes. DBs at a lower version
 # are migrated exactly once, on the next init_db(); new DBs start at this version.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -51,6 +51,9 @@ SCHEMA = """
             follow_up       TEXT    DEFAULT '',
             date_found      TEXT,
             last_checked    TEXT,
+            repost_of       INTEGER REFERENCES jobs(id),
+            salary_min      REAL,
+            salary_max      REAL,
             created_at      TEXT    DEFAULT (datetime('now'))
         );
 

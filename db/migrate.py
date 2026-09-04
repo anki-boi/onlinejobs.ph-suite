@@ -89,9 +89,63 @@ def migrate(conn) -> None:
         "WHERE (last_checked IS NULL OR last_checked = '') AND scrape_status IN ('Open', 'Closed')"
     )
 
+    # v4: structured salary + repost detection
+    for col, col_type in {
+        "repost_of":  "INTEGER",
+        "salary_min": "REAL",
+        "salary_max": "REAL",
+    }.items():
+        if col not in existing:
+            log.info("Adding column jobs.%s (v4)", col)
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {col_type}")
+    _backfill_salary(conn)
+    _backfill_reposts(conn)
+
     # Ensure unique constraint on job_url (add UNIQUE if missing by recreating)
     # SQLite doesn't support ADD CONSTRAINT, so we just rely on INSERT OR IGNORE
     # and the application-level dedup.
+
+
+def _backfill_salary(conn) -> None:
+    """Parse salary strings already in the DB into salary_min/salary_max."""
+    from scraper.salary import parse_salary
+    rows = conn.execute(
+        "SELECT id, salary FROM jobs WHERE (salary IS NOT NULL AND salary != '') "
+        "AND salary_min IS NULL"
+    ).fetchall()
+    n = 0
+    for r in rows:
+        mn, mx, _cur = parse_salary(r["salary"])
+        if mn is not None:
+            conn.execute("UPDATE jobs SET salary_min=?, salary_max=? WHERE id=?", (mn, mx, r["id"]))
+            n += 1
+    if n:
+        log.info("Backfilled salary ranges for %d jobs", n)
+        conn.commit()
+
+
+def _backfill_reposts(conn) -> None:
+    """Mark duplicate listings: same normalized title + same employer.
+    The earliest listing is the original; later ones get repost_of set."""
+    from db.repos.jobs import norm_title
+    rows = conn.execute(
+        "SELECT id, title, employer_id FROM jobs "
+        "WHERE title IS NOT NULL AND employer_id IS NOT NULL AND repost_of IS NULL"
+    ).fetchall()
+    groups: dict[tuple, list[int]] = {}
+    for r in rows:
+        groups.setdefault((r["employer_id"], norm_title(r["title"])), []).append(r["id"])
+    n = 0
+    for _key, ids in groups.items():
+        if len(ids) < 2:
+            continue
+        ids.sort()  # insertion order ~ discovery order; first is the original
+        for rid in ids[1:]:
+            conn.execute("UPDATE jobs SET repost_of=? WHERE id=?", (ids[0], rid))
+            n += 1
+    if n:
+        log.info("Marked %d reposts", n)
+        conn.commit()
 
 
 def _existing_columns(conn, table: str) -> set:
