@@ -82,6 +82,18 @@ snapshot into `backups/`, keeping the last 7.
   site claims results, the run logs a `structure change` alert instead of
   silently recording zero.
 
+## Scrape curation, auto-applied filters, full reset
+- **Auto-run scope** — the scrape panel's keywords/categories/skills can be
+  saved as the auto-run scope (`POST /api/scrape-scope`). The 4-hour auto-run
+  then harvests only that scope; empty scope = scrape everything (default).
+- **Keyword rules persist + auto-apply** — `Apply auto-hide` saves your
+  positive/negative lists server-side. Every auto-run re-applies them to fresh
+  jobs automatically (desktop alert when it hides any). Inputs hydrate from
+  the saved rules on page load — a refresh no longer wipes your filters.
+- **Full reset** — toolbar button: deletes every job + status history in one
+  shot. Keeps saved keyword rules, scrape scope, scheduler settings, resume
+  masters, and backups.
+
 ## Resume tailoring + ATS
 
 - **Master resumes** (`resumes/masters.json`) — multiple named track profiles
