@@ -124,11 +124,22 @@ snapshot into `backups/`, keeping the last 7.
 - **Export** — `GET /api/resume/export?job_id=N&tailored=1&fmt=docx|txt[&auto=1]`:
   one column, standard headings, real bullets — the layout ATS parsers chew
   best. PDF skipped (docx is what ATS want).
+- **1-page CV (Harvard)** — `POST /api/resume/build {"job_id": N, "auto": 1}`:
+  digests every file in `resume_sources` (PDF/DOCX/TXT/MD/JSON, e.g. your
+  Dropbox resumes folder), the LLM drafts a RenderCV Harvard-template YAML
+  from those facts only, renders it, and **iterates until it is exactly one
+  page** (max 4 rounds; it never ships a two-pager). Output PDF + YAML land
+  in `resumes/built/` and list in the panel's *Built CVs*. Optional: needs
+  Python 3.12+ (`install.bat` makes a separate `.venv-rendercv`; the button
+  hides itself when the toolchain is missing).
 - **LLM config** — `config.local.json` (gitignored overlay of `config.json`,
   any OpenAI-compatible endpoint): `llm_base_url` / `llm_api_key` /
   `llm_model`. Copy `config.local.json.example` to `config.local.json` and point it at
-  your endpoint (a local vLLM box, OpenAI, etc.). Without it, tailor returns 503; the
-  ATS scorer works regardless.
+  your endpoint (a local vLLM box, OpenAI, etc.). Without it, tailor and CV
+  build return 503; the ATS scorer works regardless.
+- **Resume sources** — `resume_sources: ["C:\\Users\\YOU\\Dropbox\\Resumes"]`
+  in `config.local.json`: folders or files of your resume PDFs/DOCX/TXTs that
+  the 1-page CV builder digests. Defaults to the project's `resumes/` folder.
 
 ## Files
 

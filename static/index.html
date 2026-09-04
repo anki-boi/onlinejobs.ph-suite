@@ -151,7 +151,12 @@
       <div class="row">
         <button class="btn btn-outline btn-sm" id="btn-ats" disabled>ATS score</button>
         <button class="btn btn-primary btn-sm" id="btn-tailor" disabled>Tailor (LLM)</button>
+        <button class="btn btn-outline btn-sm" id="btn-build-cv" disabled title="LLM writes rendercv YAML from all your resume sources, renders the Harvard PDF, and iterates until it is exactly one page">1-page CV (Harvard)</button>
       </div>
+      <details id="built-cv-details" style="margin-top:8px;display:none">
+        <summary class="panel-hint" style="cursor:pointer">Built CVs</summary>
+        <div id="built-cv-list" class="log-line" style="max-height:160px;overflow:auto"></div>
+      </details>
       <div id="resume-result" class="log-line" style="margin-top:8px;max-height:260px;overflow:auto;white-space:pre-wrap"></div>
       <div class="row mt-2" style="display:none" id="resume-dl-row">
         <a class="btn btn-outline btn-sm" id="dl-docx" download>Download .docx</a>
@@ -282,6 +287,7 @@
       <div id="detail-ats" class="log-line" style="white-space:pre-wrap"></div>
       <div class="row mt-2">
         <button class="btn btn-primary btn-sm" id="detail-tailor-btn">Tailor resume for this job</button>
+        <button class="btn btn-outline btn-sm" id="detail-build-cv-btn">Build 1-page CV for this job</button>
         <a class="btn btn-outline btn-sm" id="detail-dl-docx" style="display:none" download>Download tailored .docx</a>
       </div>
     </div>

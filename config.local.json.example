@@ -1,5 +1,8 @@
 {
   "llm_base_url": "http://127.0.0.1:8000/v1",
   "llm_api_key": "",
-  "llm_model": "gpt-4o-mini"
+  "llm_model": "gpt-4o-mini",
+  "resume_sources": [
+    "C:\\Users\\YOU\\Dropbox\\Resumes"
+  ]
 }

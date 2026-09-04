@@ -35,10 +35,12 @@ from db.repos import jobs as job_repo
 from db.repos import settings as settings_repo
 from db.repos import skills as skill_repo
 from resumes import ats as resume_ats_mod
+from resumes import digest as resume_digest
 from resumes import render as resume_render
 from resumes import schema as resume_schema
+from resumes import yamlcv as resume_yamlcv
 from resumes.schema import load_master, save_master, validate
-from resumes.tailor import LLMClient, tailor
+from resumes.tailor import LLMClient, job_brief, tailor
 from scraper.client import OJClient
 from scraper.pipeline import enrich, harvest
 from scraper.skills import fetch_skills, skills_to_db_rows
@@ -62,6 +64,8 @@ if _local_cfg.exists():
 _client: OJClient | None = None
 RESUME_PATH = dbconn.BASE_DIR / "resumes" / "master.json"
 MASTERS_PATH = dbconn.BASE_DIR / "resumes" / "masters.json"
+BUILT_DIR = dbconn.BASE_DIR / "resumes" / "built"
+BASE_RESUMES = dbconn.BASE_DIR / "resumes"
 
 
 def _masters() -> dict:
@@ -385,6 +389,93 @@ def resume_export(job_id: int, fmt: str = "docx", tailored: int = 0, profile: st
     from fastapi.responses import Response
     return Response(content=body, media_type=ctype,
                     headers={"Content-Disposition": f'attachment; filename="{safe}.{ext}"'})
+
+
+@app.get("/api/resume/yamlcv-status")
+def yamlcv_status():
+    """Whether the rendercv toolchain is installed (gates the UI button)."""
+    return {"available": resume_yamlcv.available()}
+
+
+@app.get("/api/resume/built")
+def built_list():
+    if not BUILT_DIR.is_dir():
+        return {"items": []}
+    items = []
+    for f in sorted(BUILT_DIR.glob("*.pdf"), key=lambda p: p.stat().st_mtime, reverse=True):
+        y = f.with_suffix(".yaml")
+        items.append({
+            "name": f.name,
+            "mtime": f.stat().st_mtime,
+            "has_yaml": y.exists(),
+            "url": f"/api/resume/built/{f.name}",
+        })
+    return {"items": items}
+
+
+@app.get("/api/resume/built/{name}")
+def built_file(name: str):
+    if "/" in name or "\\" in name or name.startswith("."):
+        raise HTTPException(400, "bad name")
+    f = BUILT_DIR / name
+    if not f.is_file():
+        raise HTTPException(404, "not found")
+    from fastapi.responses import FileResponse
+    return FileResponse(f, media_type="application/pdf")
+
+
+@app.post("/api/resume/build")
+def resume_build(body: TailorRequest):
+    """Digest resume sources + LLM draft + render-loop until exactly 1 page.
+    503 if no LLM or no rendercv toolchain; 422 if the loop can't fit a page."""
+    if not resume_yamlcv.available():
+        raise HTTPException(503, "rendercv toolchain missing - run install.bat (needs Python 3.12+)")
+    llm = LLMClient.from_config(_cfg)
+    if llm is None:
+        raise HTTPException(503, "No LLM configured - add llm_base_url/llm_model to config.local.json")
+    conn = get_db()
+    row = job_repo.get_job(conn, body.job_id)
+    if not row:
+        raise HTTPException(404, "Job not found")
+    jd = _job_dict_for_resume(row)
+    d = _masters()
+    name = resume_schema.best_profile_for_job(d, jd)[0] if body.auto \
+        else (body.profile or d.get("default") or "").strip()
+    try:
+        doc = resume_schema.get_profile(d, name)
+    except KeyError as e:
+        raise HTTPException(404, f"Unknown profile {e.args[0]!r}")
+    identity = resume_render.to_txt(doc)
+    sources = _cfg.get("resume_sources") or [
+        r"C:\Users\PC\Dropbox\Resumes", str(BASE_RESUMES)]
+    corpus = resume_digest.digest(sources)
+    if corpus["chars"] < 200:
+        raise HTTPException(400, "No readable resume source files found (set resume_sources in config.local.json)")
+    import time as _time
+    import uuid as _uuid
+    BUILT_DIR.mkdir(exist_ok=True)
+    base = f"{re.sub(r'[^A-Za-z0-9-]+', '_', row['title'] or 'cv')[:36]}_{_time.strftime('%Y%m%d-%H%M%S')}_{_uuid.uuid4().hex[:6]}"
+    out_dir = BUILT_DIR / f"{base}_work"
+    res = resume_yamlcv.build_one_pager(
+        llm, resume_digest.corpus_text(corpus), identity, job_brief(jd), out_dir)
+    final = BUILT_DIR / f"{base}.pdf"
+    if res["pdf"]:
+        Path(res["pdf"]).replace(final)
+    ym = BUILT_DIR / f"{base}.yaml"
+    ym.write_text(res["yaml"], encoding="utf-8")
+    if not res["ok"]:
+        last = res["history"][-1] if res.get("history") else {}
+        tail = f" (last attempt: {last.get('pages', '?')} pages)" if last.get("pages") else ""
+        raise HTTPException(422, f"{res.get('error') or 'could not fit one page'}{tail}")
+    return {
+        "profile": name,
+        "ok": True,
+        "rounds": res["rounds"],
+        "name": final.name,
+        "url": f"/api/resume/built/{final.name}",
+        "yaml": res["yaml"],
+        "history": res["history"],
+    }
 
 
 @app.get("/api/events")

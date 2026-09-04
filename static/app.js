@@ -970,6 +970,7 @@ async function loadResumeStatus() {
     const has = !!cur;
     $('#btn-ats').disabled = !has;
     $('#btn-tailor').disabled = !has;
+    const bc = $('#btn-build-cv'); if (bc) bc.disabled = !has;
   } catch(e) {
     $('#resume-status').textContent = 'Master resume: ' + e.message;
   }
@@ -1010,6 +1011,7 @@ function initResumePanel() {
     const has = !!$('#resume-job-sel').value;
     $('#btn-ats').disabled = !has;
     $('#btn-tailor').disabled = !has;
+    const bc = $('#btn-build-cv'); if (bc) bc.disabled = !has;
   });
   $('#btn-ats').addEventListener('click', async () => {
     const out = $('#resume-result');
@@ -1056,6 +1058,41 @@ async function detailTailorClick() {
   btn.textContent = 'Tailor resume for this job';
 }
 
+async function loadBuiltCvs() {
+  const r = await api('/api/resume/built');
+  const list = $('#built-cv-list');
+  $('#built-cv-details').style.display = r.items.length ? '' : 'none';
+  list.textContent = r.items.length ? '' : 'Nothing built yet.';
+  for (const it of r.items) {
+    const a = document.createElement('a');
+    a.href = it.url; a.target = '_blank'; a.download = '';
+    a.textContent = `${it.name} (${new Date(it.mtime*1000).toLocaleDateString()})`;
+    a.style.display = 'block'; a.style.color = 'var(--blue)';
+    a.addEventListener('click', ()=>window.open(it.url, '_blank'));
+    list.appendChild(a);
+  }
+  return r;
+}
+
+async function buildCvClick(jobId, auto, btn, statusEl, jobSel) {
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = 'Building…';
+  statusEl.textContent = 'Digesting your resume sources, drafting YAML, rendering… the 1-page loop can take a few minutes on local models.';
+  try {
+    const body = auto ? {job_id: jobId, auto: 1}
+      : {job_id: jobId, profile: jobSel ? jobSel.value : ''};
+    const r = await api('/api/resume/build', {method:'POST', body: JSON.stringify(body)});
+    statusEl.textContent = `Built in ${r.rounds} round(s) — exactly 1 page. Profile: ${r.profile}. Opening PDF…`;
+    const rounds = r.history.map(h => `  round ${h.round}: ${h.ok ? h.pages + ' page(s)' : 'FAIL ' + (h.error||'').slice(0,120)}`).join('\n');
+    statusEl.appendChild(document.createTextNode('\n' + rounds));
+    window.open(r.url, '_blank');
+    loadBuiltCvs();
+  } catch(e) { statusEl.textContent = e.message; }
+  btn.disabled = false;
+  btn.textContent = old;
+}
+
 document.addEventListener('DOMContentLoaded', ()=>{
   init();
   connectEvents();
@@ -1067,5 +1104,26 @@ document.addEventListener('DOMContentLoaded', ()=>{
   loadSkills();
   initResumePanel();
   loadResumeStatus();
+  loadBuiltCvs();
+  api('/api/resume/yamlcv-status').then(r=>{
+    for (const id of ['btn-build-cv','detail-build-cv-btn']) {
+      const b = $(`#${id}`);
+      if (!b) continue;
+      if (!r.available) {
+        b.style.display = 'none';
+      } else if (id === 'btn-build-cv') {
+        b.addEventListener('click', ()=>{
+          const sel = $('#resume-job-sel');
+          if (!sel.value) { $('#resume-result').textContent = 'Pick a job to target first.'; return; }
+          buildCvClick(+sel.value, 0, b, $('#resume-result'), sel);
+        });
+      } else {
+        b.addEventListener('click', ()=>{
+          if (!currentJob?.id) return;
+          buildCvClick(currentJob.id, 1, b, $('#detail-ats'), null);
+        });
+      }
+    }
+  });
   $('#detail-tailor-btn')?.addEventListener('click', detailTailorClick);
 });

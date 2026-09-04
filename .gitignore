@@ -13,3 +13,8 @@ _deep_explore.js
 backups/
 resumes/masters.json
 plans/
+
+# rendercv PDF toolchain (Python 3.12 venv, made by install.bat)
+.venv-rendercv/
+# built one-page CVs (personal output)
+resumes/built/
