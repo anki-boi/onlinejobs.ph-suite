@@ -10,6 +10,7 @@ const state = {
   negFilters: [],      // negative keyword filters
   includeHidden: false,
   hideReposts: false,
+  minAts: false,
   total: 0,
   scraping: false,
   activeRun: null,        // 'harvest' | 'check' | null — drives button phase labels
@@ -116,6 +117,7 @@ function buildJobsParams(perPage) {
   if (pf.from) p.set('posted_from', pf.from);
   if (pf.to) p.set('posted_to', pf.to);
   if (state.hasSalaryOnly) p.set('has_salary','1');
+  if (state.minAts) p.set('min_ats','50');
   if (state.sort) { p.set('sort', state.sort); p.set('order', state.order); }
   return p;
 }
@@ -593,6 +595,7 @@ function init() {
   });
   $('#filter-hidden').addEventListener('change', e=>{state.includeHidden=e.target.checked;loadJobs();});
   $('#filter-reposts').addEventListener('change', e=>{state.hideReposts=e.target.checked;applyVisibleFilter();});
+  $('#filter-min-ats').addEventListener('change', e=>{state.minAts=e.target.checked;loadJobs();});
   $('#filter-has-salary').addEventListener('change', e=>{
     state.hasSalaryOnly = e.target.checked;
     updateFunnelIndicators();

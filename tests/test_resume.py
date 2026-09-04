@@ -293,3 +293,30 @@ def test_profiles_endpoint_and_auto_pick(client, conn, tmp_path, monkeypatch):
     r = client.post("/api/resume/tailor", json={"job_id": c, "auto": 1})
     assert r.status_code == 200
     assert r.json()["profile"] and r.json()["score"]["total"] > 0
+
+
+def test_jobs_min_ats_filter(client, conn, tmp_path, monkeypatch):
+    """?min_ats=50 hides jobs every master profile scores below 50 on."""
+    import app.server as srv
+    from db.repos import jobs as job_repo
+    monkeypatch.setattr(srv, "MASTERS_PATH", Path(__file__).parent.parent / "resumes" / "masters.json")
+    srv._ats_memo.clear()
+    srv._ats_memo_key = None
+    # Job A: skills two of his profiles have (Excel + Data Entry-ish) — expect >= 50
+    job_repo.upsert_stub(conn, job_id=1, job_url="http://a", title="Excel & Data Entry Assistant",
+                         skills=["Excel", "Data Entry"])
+    # Job B: skills none of his profiles have — expect < 50
+    job_repo.upsert_stub(conn, job_id=2, job_url="http://b", title="Welder & Carpenter",
+                         skills=["Welding", "Carpentry"])
+    conn.commit()
+    r = client.get("/api/jobs", params={"min_ats": 50, "per_page": 99999})
+    assert r.status_code == 200
+    body = r.json()
+    kept = {j["title"] for j in body["jobs"]}
+    assert "Excel & Data Entry Assistant" in kept
+    assert "Welder & Carpenter" not in kept
+    assert body["total"] == 1
+    # sanity: the two scores actually straddle the threshold
+    sA = client.get("/api/resume/ats", params={"job_id": 1, "auto": 1}).json()["total"]
+    sB = client.get("/api/resume/ats", params={"job_id": 2, "auto": 1}).json()["total"]
+    assert sA >= 50 > sB

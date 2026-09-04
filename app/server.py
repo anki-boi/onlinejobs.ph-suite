@@ -65,6 +65,45 @@ MASTERS_PATH = dbconn.BASE_DIR / "resumes" / "masters.json"
 def _masters() -> dict:
     return resume_schema.load_masters(MASTERS_PATH)
 
+# ponytail: per-process memo of best-profile ATS per job; invalidated when the
+# DB or masters file changes. 2,800 rows ≈ 5.5s cold, ~0s warm.
+_ats_memo: dict[int, tuple] = {}
+_ats_memo_key = None
+
+def _best_ats_for_row(conn, r) -> tuple:
+    global _ats_memo_key
+    # ponytail: mtime bumps on every WAL write, so key on row shape instead —
+    # scores may lag in-place enrichment updates until a job row is added/deleted.
+    row = tuple(conn.execute("SELECT COALESCE(MAX(id),0), COUNT(*) FROM jobs").fetchone())
+    key = (row,
+           MASTERS_PATH.stat().st_mtime if MASTERS_PATH.exists() else 0,)
+    if key != _ats_memo_key:
+        _ats_memo.clear()
+        _ats_memo_key = key
+    if r["id"] not in _ats_memo:
+        _ats_memo[r["id"]] = resume_schema.best_profile_for_job(_masters(), _job_dict_for_resume(r))
+    return _ats_memo[r["id"]] 
+
+# In-process cache of (profile, total_score) per job for the min_ats filter.
+# ponytail: rebuilt when the DB file or masters file changes; jobs updated in
+# place (enrichment) only invalidate via DB mtime — good enough for a filter.
+_ats_cache: dict[int, tuple] = {}
+_ats_cache_key = None
+
+def _ats_cache_refresh(conn) -> None:
+    global _ats_cache_key
+    key = (dbconn.DB_PATH.stat().st_mtime, MASTERS_PATH.stat().st_mtime if MASTERS_PATH.exists() else 0,
+           conn.execute("SELECT COALESCE(MAX(id),0) FROM jobs").fetchone()[0])
+    if key != _ats_cache_key:
+        _ats_cache = {}
+        _ats_cache_key = key
+
+def _best_for_row(r) -> tuple:
+    """(profile_name, score) — best of all master profiles, memoised."""
+    if r["id"] not in _ats_cache:
+        _ats_cache[r["id"]] = resume_schema.best_profile_for_job(_masters(), _job_dict_for_resume(r))
+    return _ats_cache[r["id"]]
+
 # Default UA — a missing/empty config value must never override it with "".
 _DEFAULT_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -129,6 +168,7 @@ def list_jobs(
     posted_from: str | None = None,  # inclusive range start (YYYY-MM-DD) on the displayed posted date
     posted_to: str | None = None,    # inclusive range end
     has_salary: bool = False,
+    min_ats: int = 0,  # hide jobs whose best-profile ATS score is below this
 ):
     conn = get_db()
     rows, total = job_repo.get_jobs(
@@ -141,6 +181,15 @@ def list_jobs(
         posted_from=posted_from, posted_to=posted_to,
         has_salary=has_salary,
     )
+    if min_ats:
+        kept = []
+        for r in rows:
+            _, sc = _best_ats_for_row(conn, r)
+            if sc["total"] >= min_ats:
+                kept.append(r)
+        # ponytail: filters the fetched page (UI loads per_page=99999 = full set);
+        # small per_page + min_ats would be per-page, not global.
+        rows, total = kept, len(kept)
     return {"jobs": [dict(r) for r in rows], "total": total, "page": page, "per_page": per_page}
 
 
