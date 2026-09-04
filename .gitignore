@@ -18,3 +18,4 @@ plans/
 .venv-rendercv/
 # built one-page CVs (personal output)
 resumes/built/
+rendercv_output/
