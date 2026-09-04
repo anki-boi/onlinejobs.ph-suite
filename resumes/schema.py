@@ -1,0 +1,82 @@
+"""
+resumes/schema.py — master resume: one canonical JSON document, the source of
+truth the LLM tailors from. Deliberately flat and boring: LLMs emit simple
+typed JSON reliably; the jsonresume.org spec adds ceremony nobody consumes.
+"""
+
+import json
+from pathlib import Path
+
+REQUIRED_BASIC = ("name", "email", "phone")
+
+
+def validate(m) -> list:
+    """Return a list of human-readable problems (empty = valid)."""
+    errs = []
+    if not isinstance(m, dict):
+        return ["resume must be a JSON object"]
+    b = m.get("basics")
+    if not isinstance(b, dict):
+        errs.append("basics: missing or not an object")
+        b = {}
+    for k in REQUIRED_BASIC:
+        if not str(b.get(k) or "").strip():
+            errs.append(f"basics.{k}: required")
+    if not str(b.get("summary") or "").strip():
+        errs.append("basics.summary: required")
+    if not isinstance(m.get("skills"), list) or not all(isinstance(s, str) for s in m.get("skills", [])):
+        errs.append("skills: must be a list of strings")
+    for i, w in enumerate(m.get("work") or []):
+        if not isinstance(w, dict) or not str(w.get("role") or "").strip():
+            errs.append(f"work[{i}].role: required")
+        if not isinstance(w.get("bullets"), list):
+            errs.append(f"work[{i}].bullets: must be a list")
+    for i, e in enumerate(m.get("education") or []):
+        if not isinstance(e, dict) or not str(e.get("school") or "").strip():
+            errs.append(f"education[{i}].school: required")
+    return errs
+
+
+def load_master(path) -> dict:
+    p = Path(path)
+    if not p.exists():
+        return seed_master(p)
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+def save_master(path, m) -> None:
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(json.dumps(m, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def seed_master(path) -> dict:
+    """First-run placeholder — realistic shape, content to be replaced."""
+    m = {
+        "basics": {
+            "name": "Your Name",
+            "email": "you@example.com",
+            "phone": "+63 900 000 0000",
+            "location": "Cebu City, PH",
+            "summary": "Virtual assistant with experience in admin support, bookkeeping, "
+                       "and email handling for US-based clients.",
+        },
+        "skills": ["Bookkeeping", "Data Entry", "Email Support", "Microsoft Excel",
+                   "Google Sheets", "Customer Service"],
+        "work": [
+            {
+                "role": "Virtual Assistant",
+                "company": "Previous Company",
+                "start": "2023-01",
+                "end": "Present",
+                "bullets": [
+                    "Handled 50+ emails/day with sub-one-hour response times",
+                    "Maintained client ledgers and monthly P&L summaries in Excel",
+                ],
+            },
+        ],
+        "education": [
+            {"school": "Your University", "degree": "BS Information Technology", "year": "2022"},
+        ],
+    }
+    save_master(path, m)
+    return m

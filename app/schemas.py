@@ -48,3 +48,11 @@ class NotesUpdate(BaseModel):
 
 class FollowUpUpdate(BaseModel):
     follow_up: str
+
+
+class ResumeUpdate(BaseModel):
+    master: dict
+
+
+class TailorRequest(BaseModel):
+    job_id: int

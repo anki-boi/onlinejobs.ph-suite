@@ -82,6 +82,27 @@ snapshot into `backups/`, keeping the last 7.
   site claims results, the run logs a `structure change` alert instead of
   silently recording zero.
 
+## Resume tailoring + ATS
+
+- **Master resume** (`resumes/master.json`) — one JSON document:
+  basics / skills / work / education. Edit via `PUT /api/resume` or on disk.
+  Seeded with a realistic VA placeholder on first use.
+- **ATS score** — deterministic, not LLM (recruiter-side first passes are
+  keyword + structure based, and a rule scorer can't hallucinate):
+  `GET /api/resume/ats?job_id=N` → 0-100 = skills 40 + keywords 20 +
+  format 25 + completeness 15, with matched/missing skills and rule-based
+  suggestions. Shown automatically in every job's detail drawer.
+- **Tailor** — `POST /api/resume/tailor {"job_id": N}`: the LLM rewrites the
+  master for that job — rewrite & reorder only, never invents facts; invalid
+  or failed output falls back to the master. Returns tailored resume + score.
+- **Export** — `GET /api/resume/export?job_id=N&tailored=1&fmt=docx|txt`:
+  one column, standard headings, real bullets — the layout ATS parsers chew
+  best. PDF skipped (docx is what ATS want).
+- **LLM config** — `config.local.json` (gitignored overlay of `config.json`,
+  any OpenAI-compatible endpoint): `llm_base_url` / `llm_api_key` /
+  `llm_model`. Pre-wired to the WSL vLLM box (`qwen3.8-27b` :18020). Without
+  it, tailor returns 503; the ATS scorer works regardless.
+
 ## Files
 
 | Path | Purpose |
@@ -98,6 +119,8 @@ snapshot into `backups/`, keeping the last 7.
 | `scraper/parsers.py` | HTML → structured data (search list, detail, closed detection) |
 | `scraper/pipeline.py` | `harvest()` / `enrich()` event generators |
 | `scraper/skills.py` | Skills API client |
+| `resumes/{schema,ats,tailor,render}.py` | Master-resume JSON, deterministic ATS scorer, LLM tailor, docx/txt render |
+| `resumes/master.json` | Your master resume (seeded in repo; edit via UI) |
 | `static/index.html` / `static/app.js` / `static/style.css` | Dashboard UI |
 | `tests/` | pytest suite (DB, parsers, pipeline, API) |
 

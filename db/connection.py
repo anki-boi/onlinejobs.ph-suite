@@ -88,7 +88,13 @@ SCHEMA = """
 def _load_config() -> dict:
     cfg_path = BASE_DIR / "config.json"
     if cfg_path.exists():
-        return json.loads(cfg_path.read_text())
+        cfg = json.loads(cfg_path.read_text())
+    else:
+        cfg = {}
+    local = BASE_DIR / "config.local.json"  # gitignored overlay (keys etc.)
+    if local.exists():
+        cfg = {**cfg, **json.loads(local.read_text())}
+    return cfg
     return {}
 
 _config = _load_config()

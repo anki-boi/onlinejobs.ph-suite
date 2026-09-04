@@ -20,8 +20,10 @@ from app.schemas import (
     KeywordFilter,
     NotesUpdate,
     PipelineRequest,
+    ResumeUpdate,
     ScheduleUpdate,
     StatusUpdate,
+    TailorRequest,
 )
 from app.sse import sse
 from app import events as events_hub
@@ -30,6 +32,10 @@ from app import scheduler
 import db.connection as dbconn
 from db.repos import jobs as job_repo
 from db.repos import skills as skill_repo
+from resumes import ats as resume_ats_mod
+from resumes import render as resume_render
+from resumes.schema import load_master, save_master, validate
+from resumes.tailor import LLMClient, tailor
 from scraper.client import OJClient
 from scraper.pipeline import enrich, harvest
 from scraper.skills import fetch_skills, skills_to_db_rows
@@ -46,8 +52,12 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 _cfg_path = dbconn.BASE_DIR / "config.json"
 _cfg = json.loads(_cfg_path.read_text()) if _cfg_path.exists() else {}
+_local_cfg = dbconn.BASE_DIR / "config.local.json"   # gitignored overlay (keys etc.)
+if _local_cfg.exists():
+    _cfg = {**_cfg, **json.loads(_local_cfg.read_text())}
 
 _client: OJClient | None = None
+RESUME_PATH = dbconn.BASE_DIR / "resumes" / "master.json"
 
 # Default UA — a missing/empty config value must never override it with "".
 _DEFAULT_UA = (
@@ -199,8 +209,88 @@ def set_schedule(body: ScheduleUpdate):
     if body.interval_hours is not None:
         if not 1 <= body.interval_hours <= 24:
             raise HTTPException(400, "interval_hours must be 1-24")
-        settings_repo.set(conn, "auto_run_interval_hours", body.interval_hours)
+        settings_repo.set(conn, "auto_run_interval_hours", str(body.interval_hours))
     return get_schedule()
+
+
+# ── Resume tailoring + ATS ───────────────────────────────────────────────
+
+def _job_dict_for_resume(row) -> dict:
+    return {
+        "title": row["title"],
+        "employer": row["company"],
+        "skills": row["skills"],
+        "keywords": row["search_keyword"],
+        "salary": row["salary"],
+        "description": row["description"],
+    }
+
+
+@app.get("/api/resume")
+def get_resume():
+    return load_master(RESUME_PATH)
+
+
+@app.put("/api/resume")
+def put_resume(body: ResumeUpdate):
+    errs = validate(body.master)
+    if errs:
+        raise HTTPException(400, "; ".join(errs))
+    save_master(RESUME_PATH, body.master)
+    return body.master
+
+
+@app.get("/api/resume/ats")
+def resume_ats(job_id: int):
+    """Deterministic ATS-style score of the current master resume vs one job."""
+    conn = get_db()
+    row = job_repo.get_job(conn, job_id)
+    if not row:
+        raise HTTPException(404, "Job not found")
+    return resume_ats_mod.score_resume(resume_render.to_txt(load_master(RESUME_PATH)),
+                                   _job_dict_for_resume(row))
+
+
+@app.post("/api/resume/tailor")
+def resume_tailor(body: TailorRequest):
+    """LLM-tailored resume for one job + its ATS score. 503 if no LLM configured."""
+    llm = LLMClient.from_config(_cfg)
+    if llm is None:
+        raise HTTPException(503, "No LLM configured — add llm_base_url/llm_model to config.json")
+    conn = get_db()
+    row = job_repo.get_job(conn, body.job_id)
+    if not row:
+        raise HTTPException(404, "Job not found")
+    master = load_master(RESUME_PATH)
+    tailored = tailor(master, _job_dict_for_resume(row), llm)
+    return {
+        "tailored": tailored,
+        "changed": tailored != master,
+        "score": resume_ats_mod.score_resume(resume_render.to_txt(tailored), _job_dict_for_resume(row)),
+    }
+
+
+@app.get("/api/resume/export")
+def resume_export(job_id: int, fmt: str = "docx", tailored: int = 0):
+    conn = get_db()
+    row = job_repo.get_job(conn, job_id)
+    if not row:
+        raise HTTPException(404, "Job not found")
+    m = load_master(RESUME_PATH)
+    if tailored:
+        llm = LLMClient.from_config(_cfg)
+        if llm is None:
+            raise HTTPException(503, "No LLM configured — add llm_base_url/llm_model to config.json")
+        m = tailor(m, _job_dict_for_resume(row), llm)
+    if fmt == "txt":
+        body, ctype, ext = resume_render.to_txt(m), "text/plain; charset=utf-8", "txt"
+    else:
+        body, ctype, ext = resume_render.to_docx(m), \
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"
+    safe = re.sub(r"[^A-Za-z0-9-]+", "_", row["title"] or "resume")[:40]
+    from fastapi.responses import Response
+    return Response(content=body, media_type=ctype,
+                    headers={"Content-Disposition": f'attachment; filename="{safe}.{ext}"'})
 
 
 @app.get("/api/events")
