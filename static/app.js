@@ -88,7 +88,7 @@ function updateNextHint() {
     const n = state.stats.follow_ups_due;
     msg = `⏰ ${n} follow-up${n>1?'s':''} due — open the job and nudge the employer.`;
   } else if (!state.stats || !state.stats.total) {
-    msg = 'Start here: set a scope in "Find new jobs" and hit Scrape.';
+    msg = 'Your database is empty. Click Scrape jobs to pull the latest OnlineJobs.ph listings (or set a keyword / category scope first). The auto-run also scrapes on its own schedule.';
   } else if (state.total === 0) {
     msg = 'Nothing matches this view — loosen a filter (or tick "Show hidden"), or run another scrape.';
   } else if ((state.stats['New']||0) > 0) {
@@ -917,6 +917,18 @@ function connectEvents() {
 // ── Resume tailoring + ATS ────────────────────────────────────────────
 let resumeMaster = null;
 
+function prefillResumeForm(doc, profileName) {
+  const el = $('#resume-edit'); if (!el) return;
+  const b = (doc && doc.basics) || {};
+  $('#r-name').value = b.name || '';
+  $('#r-email').value = b.email || '';
+  $('#r-phone').value = b.phone || '';
+  $('#r-location').value = b.location || '';
+  $('#r-summary').value = b.summary || '';
+  $('#r-skills').value = ((doc && doc.skills) || []).join('\n');
+  $('#resume-edit-profile').textContent = 'Editing: ' + (profileName ? profileName : 'default profile (auto-pick)');
+}
+
 function formatAts(r) {
   const b = r.breakdown || {};
   const prof = r.profile ? `Best-fit profile: ${r.profile}\n` : '';
@@ -930,9 +942,11 @@ function formatAts(r) {
 
 async function loadResumeStatus() {
   try {
-    resumeMaster = await api('/api/resume');
+    const p = $('#resume-profile-sel')?.value || '';
+    resumeMaster = await api(`/api/resume${p ? `?profile=${encodeURIComponent(p)}` : ''}`);
     $('#resume-status').textContent =
       `Master resume: ${resumeMaster.basics?.name||'?'} (${(resumeMaster.skills||[]).length} skills)`;
+    prefillResumeForm(resumeMaster, p);
     // profile list
     try {
       const profs = await api('/api/resume/profiles');
@@ -968,6 +982,30 @@ function profileParam() {
 }
 
 function initResumePanel() {
+  $('#resume-profile-sel').addEventListener('change', () => loadResumeStatus());
+  $('#btn-save-resume').addEventListener('click', async () => {
+    const b = {
+      name: $('#r-name').value.trim(),
+      email: $('#r-email').value.trim(),
+      phone: $('#r-phone').value.trim(),
+      location: $('#r-location').value.trim(),
+      summary: $('#r-summary').value.trim(),
+    };
+    for (const k of ['name', 'email', 'phone', 'summary'])
+      if (!b[k]) { toast('Add your ' + k, 'err'); return; }
+    const skills = $('#r-skills').value.split('\n').map(s => s.trim()).filter(Boolean);
+    const base = resumeMaster || {};
+    const master = { basics: b, skills, work: base.work || [], education: base.education || [] };
+    const p = $('#resume-profile-sel').value;
+    const btn = $('#btn-save-resume');
+    btn.disabled = true;
+    try {
+      await api('/api/resume', { method: 'PUT', body: JSON.stringify({ master, profile: p }) });
+      toast('Resume saved', 'ok');
+      await loadResumeStatus();
+    } catch (e) { toast(e.message, 'err'); }
+    btn.disabled = false;
+  });
   $('#resume-job-sel').addEventListener('change', () => {
     const has = !!$('#resume-job-sel').value;
     $('#btn-ats').disabled = !has;

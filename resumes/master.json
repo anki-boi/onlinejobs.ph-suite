@@ -1,55 +1,32 @@
 {
   "basics": {
-    "name": "Juan Garcia",
-    "email": "juan.garcia@example.com",
-    "phone": "+63 906 220 6303",
-    "location": "Cebu City, Philippines (PH time, PST-overlap available)",
-    "summary": "Virtual assistant with 3+ years supporting US-based businesses: bookkeeping, accounts payable/receivable, payroll prep, and day-to-day admin. Zoho Books and QuickBooks Online experience; Excel/Sheets for reporting; sub-1-hour email response."
+    "name": "Your Full Name",
+    "email": "you@example.com",
+    "phone": "+00 000 000 0000",
+    "location": "City, Country",
+    "summary": "Replace this with one or two sentences on who you are and the work you're best at. This is what the ATS matcher reads, and what a recruiter sees first."
   },
   "skills": [
-    "Bookkeeping",
-    "QuickBooks Online",
-    "Zoho Books",
-    "Accounts Payable",
-    "Accounts Receivable",
-    "Payroll Preparation",
-    "Data Entry",
+    "Data entry",
+    "Email management",
     "Microsoft Excel",
-    "Google Sheets",
-    "Email Support",
-    "Calendar Management",
-    "Customer Service",
-    "Invoicing",
-    "Reconciliation"
+    "Google Workspace"
   ],
   "work": [
     {
-      "role": "Virtual Assistant",
-      "company": "Salhab Pharmacy",
-      "start": "2023-01",
+      "role": "Your Job Title",
+      "company": "Company Name",
+      "start": "2022-01",
       "end": "Present",
       "bullets": [
-        "Process 100+ daily patient orders into Zoho Books; keep ledgers and inventory records current",
-        "Run monthly reconciliation and P&L summary in Excel for the owner; close out discrepancies same week",
-        "Answer and route 50+ emails/day with a sub-1-hour response time; manage the office calendar",
-        "Prepare monthly payroll files and supplier payment batches; cut invoice processing time by ~30%"
-      ]
-    },
-    {
-      "role": "Freelance Virtual Assistant",
-      "company": "Upwork clients (US)",
-      "start": "2021-06",
-      "end": "2023-01",
-      "bullets": [
-        "Supported 4 US clients concurrently: inbox management, data entry, spreadsheet upkeep, and meeting notes",
-        "Maintained 100% on-time delivery across 200+ tracked tasks"
+        "Describe a real result you delivered. Numbers make it land - e.g. handled 50+ emails a day with a one-hour response time."
       ]
     }
   ],
   "education": [
     {
-      "school": "CTC University",
-      "degree": "BS Information Technology",
+      "school": "Your School",
+      "degree": "Your degree or license",
       "year": "2022"
     }
   ]

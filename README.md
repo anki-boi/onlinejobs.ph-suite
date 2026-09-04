@@ -13,6 +13,14 @@ python main.py                # starts on http://127.0.0.1:8371
 Optional flags: `--port 8080`, `--host 0.0.0.0`, `--skip-skills`.
 First run auto-fetches the site's skill taxonomy into `jobs.db` (skippable with `--skip-skills`).
 
+**Windows, no Python yet?** Double-click `install.bat` once (it makes a venv and installs
+the dependencies), then `run.bat` to start.
+
+**Fresh clone, first run:** open **http://127.0.0.1:8371**, expand **Resume → Edit your
+resume** and fill in your name, email, phone and skills. Hit **Scrape jobs** (or wait for
+the auto-run) to fill the table. Everything you add stays on this machine — your data and
+resume are local, only the code is in this repo.
+
 Configuration lives in `config.json`:
 
 | Key | Meaning |
@@ -118,8 +126,9 @@ snapshot into `backups/`, keeping the last 7.
   best. PDF skipped (docx is what ATS want).
 - **LLM config** — `config.local.json` (gitignored overlay of `config.json`,
   any OpenAI-compatible endpoint): `llm_base_url` / `llm_api_key` /
-  `llm_model`. Pre-wired to the WSL vLLM box (`qwen3.8-27b` :18020). Without
-  it, tailor returns 503; the ATS scorer works regardless.
+  `llm_model`. Copy `config.local.json.example` to `config.local.json` and point it at
+  your endpoint (a local vLLM box, OpenAI, etc.). Without it, tailor returns 503; the
+  ATS scorer works regardless.
 
 ## Files
 
@@ -138,7 +147,10 @@ snapshot into `backups/`, keeping the last 7.
 | `scraper/pipeline.py` | `harvest()` / `enrich()` event generators |
 | `scraper/skills.py` | Skills API client |
 | `resumes/{schema,ats,tailor,render}.py` | Multi-profile master JSON, deterministic ATS scorer, LLM tailor, docx/txt render |
-| `resumes/masters.json` | Named track resumes (clinical / healthcare / tech-data), seeded from the real Dropbox masters |
+| `resumes/master.json` | Starter template (edit in the UI) — a fresh clone starts from this |
+| `resumes/masters.json` | Your named track profiles (gitignored, local-only) — created by editing the resume in the UI |
+| `config.local.json.example` | Template for the (gitignored) `config.local.json` LLM settings |
+| `install.bat` / `run.bat` | Windows double-click setup + start (creates a venv) |
 | `static/index.html` / `static/app.js` / `static/style.css` | Dashboard UI |
 | `tests/` | pytest suite (DB, parsers, pipeline, API) |
 

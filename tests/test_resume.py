@@ -320,3 +320,39 @@ def test_jobs_min_ats_filter(client, conn, tmp_path, monkeypatch):
     sA = client.get("/api/resume/ats", params={"job_id": 1, "auto": 1}).json()["total"]
     sB = client.get("/api/resume/ats", params={"job_id": 2, "auto": 1}).json()["total"]
     assert sA >= 50 > sB
+
+
+def test_resume_form_roundtrip_template(client, tmp_path, monkeypatch):
+    """Shareability: a fresh clone (no masters.json) starts from the tracked
+    starter template, and the in-UI form (PUT basics+skills) persists + reads back."""
+    import shutil
+    repo_template = Path(__file__).parent.parent / "resumes" / "master.json"
+    mp = tmp_path / "master.json"
+    shutil.copy(repo_template, mp)
+    monkeypatch.setattr("app.server.RESUME_PATH", mp)
+    monkeypatch.setattr("app.server.MASTERS_PATH", tmp_path / "masters.json")  # absent -> fallback to master.json
+    monkeypatch.setattr("app.server._cfg", {})
+
+    r = client.get("/api/resume")
+    assert r.status_code == 200
+    assert r.json()["basics"]["name"] == "Your Full Name"  # the starter placeholder
+
+    # What the form submits: edited basics + skills, work/education carried through unchanged.
+    base = r.json()
+    body = {
+        "profile": "",  # empty -> saved to the default profile
+        "master": {
+            "basics": {"name": "A Stranger", "email": "stranger@example.com",
+                       "phone": "+1 555 0000", "location": "Somewhere",
+                       "summary": "I automate repetitive admin work."},
+            "skills": ["Data entry", "Email management", "n8n"],
+            "work": base.get("work", []),
+            "education": base.get("education", []),
+        },
+    }
+    assert client.put("/api/resume", json=body).status_code == 200
+
+    r = client.get("/api/resume")
+    assert r.json()["basics"]["name"] == "A Stranger"
+    assert "n8n" in r.json()["skills"]
+    assert r.json()["work"][0]["role"] == "Your Job Title"  # template work preserved

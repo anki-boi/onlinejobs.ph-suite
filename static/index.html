@@ -134,6 +134,17 @@
       <select id="resume-profile-sel" class="input" style="width:100%;margin-bottom:6px">
         <option value="">Auto-pick best profile</option>
       </select>
+      <details id="resume-edit" style="margin-bottom:8px">
+        <summary class="panel-hint" style="cursor:pointer">Edit your resume</summary>
+        <div id="resume-edit-profile" class="panel-hint" style="margin-bottom:6px">Editing: …</div>
+        <input id="r-name" class="input" style="width:100%;margin-bottom:5px" placeholder="Full name">
+        <input id="r-email" class="input" style="width:100%;margin-bottom:5px" placeholder="you@email.com">
+        <input id="r-phone" class="input" style="width:100%;margin-bottom:5px" placeholder="+63 …">
+        <input id="r-location" class="input" style="width:100%;margin-bottom:5px" placeholder="City, Country">
+        <textarea id="r-summary" class="input" rows="3" style="width:100%;margin-bottom:5px" placeholder="1-2 sentence summary"></textarea>
+        <textarea id="r-skills" class="input" rows="3" style="width:100%;margin-bottom:6px" placeholder="One skill per line"></textarea>
+        <button class="btn btn-primary btn-sm" id="btn-save-resume">Save resume</button>
+      </details>
       <select id="resume-job-sel" class="input" style="width:100%;margin-bottom:6px">
         <option value="">Pick a job to target…</option>
       </select>
