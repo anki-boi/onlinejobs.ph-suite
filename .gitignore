@@ -10,3 +10,4 @@ _probe.mjs
 _deep_explore.js
 *.egg-info/
 .venv/
+backups/
