@@ -14,8 +14,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scraper.pipeline import enrich, PipelineEvent
-from tests.test_parsers import CLOSED_HTML, DETAIL_HTML
+from scraper.pipeline import enrich, harvest, PipelineEvent
+from tests.test_parsers import CLOSED_HTML, DETAIL_HTML, SEARCH_HTML
 
 
 class FakeResp:
@@ -170,3 +170,64 @@ def test_enrich_gone_page_parse_also_closed():
     results = [e for e in events if e.type == "enrich_result"]
     assert results[0].data["is_closed"] is True
     assert events[-1].data["closed"] == 1
+
+
+# ── Parse watchdog: a site redesign must fail loudly, not silently ─────────
+
+class AnyPageClient:
+    """Serves the same html for every URL (harvest builds URLs from base_url)."""
+    stopped = False
+    base_url = "http://x"
+
+    def __init__(self, html):
+        self.html = html
+
+    def get(self, url):
+        # The real site runs out of results pages; mimic that from page 2 on,
+        # otherwise harvest() walks pages forever.
+        if "/jobsearch/" in url or "/c/" in url:
+            return FakeResp(self.html.replace("jobpost-cat-box", ""))
+        return FakeResp(self.html)
+
+
+def _with_data_layer(html, count):
+    return html.replace("<html><body>",
+                        f'<html><body><script>window.dataLayer = [{{"search_result_count":{count}}}]</script>')
+
+
+def test_harvest_watchdog_zero_stubs_with_results_claimed():
+    """Site claims N results but 0 job boxes parse → structure change, warn loudly."""
+    html = _with_data_layer(SEARCH_HTML, 42).replace("jobpost-cat-box", "jobpost-renamed-box")
+    events = list(harvest(AnyPageClient(html)))
+    errs = [e for e in events if e.type == "error"]
+    assert any("job boxes parsed" in e.message for e in errs)
+
+
+def test_harvest_no_watchdog_when_parsing_ok():
+    events = list(harvest(AnyPageClient(SEARCH_HTML)))
+    assert not any(e.type == "error" for e in events)
+    stubs = sum(len(e.data["stubs"]) for e in events if e.type == "harvest_result")
+    assert stubs == 2
+
+
+def test_enrich_watchdog_zero_titles():
+    """All fetched 200 detail pages parse no title → structure change, warn."""
+    client = FakeClient({
+        "http://a/job/1": "<html><body><div>no h1 here</div></body></html>",
+        "http://a/job/2": "<html><body><div>still none</div></body></html>",
+    })
+    events = list(enrich(client, [(1, "http://a/job/1"), (2, "http://a/job/2")], workers=2))
+    errs = [e for e in events if e.type == "error"]
+    assert any("none parsed a title" in e.message for e in errs)
+
+
+def test_enrich_watchdog_ignores_closed_and_ok_pages():
+    """Closed pages (gone phrase) don't count as parse misses; a parsed title silences the watch."""
+    from tests.test_parsers import GONE_HTML
+    client = FakeClient({
+        "http://a/job/1": GONE_HTML,
+        "http://a/job/2": "<html><body><div>no h1</div></body></html>",
+        "http://a/job/3": DETAIL_HTML,
+    })
+    events = list(enrich(client, [(1, "http://a/job/1"), (2, "http://a/job/2"), (3, "http://a/job/3")], workers=3))
+    assert not any(e.type == "error" for e in events)

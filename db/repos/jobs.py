@@ -376,6 +376,13 @@ def get_stats(conn: sqlite3.Connection) -> dict:
         "SELECT COUNT(*) FROM jobs WHERE filter_hidden = 1"
     ).fetchone()[0]
 
+    # Active-pipeline jobs whose follow-up date is today or in the past.
+    stats["follow_ups_due"] = conn.execute(
+        "SELECT COUNT(*) FROM jobs WHERE follow_up IS NOT NULL AND follow_up != '' "
+        "AND date(follow_up) <= date('now') "
+        "AND status IN ('Interested', 'Applied', 'Interviewing')"
+    ).fetchone()[0]
+
     return stats
 
 

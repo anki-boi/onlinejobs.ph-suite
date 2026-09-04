@@ -66,7 +66,10 @@ async function loadStats() {
       <div class="stat-pill applied"><span class="stat-num">${s['Applied']||0}</span> Applied</div>
       <div class="stat-pill interviewing"><span class="stat-num">${s['Interviewing']||0}</span> Interview</div>
       <div class="stat-pill hired"><span class="stat-num">${s['Hired']||0}</span> Hired</div>
-      <div class="stat-pill"><span class="stat-num">${s.total||0}</span> Total</div>`;
+      <div class="stat-pill"><span class="stat-num">${s.total||0}</span> Total</div>${
+        (s.follow_ups_due||0) > 0
+          ? `<div class="stat-pill followup-due" title="Applied/Interviewing/Interested jobs past their follow-up date"><span class="stat-num">${s.follow_ups_due}</span> Follow-ups due</div>`
+          : ''}`;
     state.stats = s;
     updateNextHint();
   } catch(e) {}
@@ -79,6 +82,9 @@ function updateNextHint() {
   let msg = '';
   if (state.scraping) {
     msg = 'Working — new jobs land in the table as they\'re found. Watch the activity feed.';
+  } else if ((state.stats?.follow_ups_due||0) > 0) {
+    const n = state.stats.follow_ups_due;
+    msg = `⏰ ${n} follow-up${n>1?'s':''} due — open the job and nudge the employer.`;
   } else if (!state.stats || !state.stats.total) {
     msg = 'Start here: set a scope in "Find new jobs" and hit Scrape.';
   } else if (state.total === 0) {
@@ -92,8 +98,9 @@ function updateNextHint() {
 }
 
 // ── Jobs table ──────────────────────────────────────────────────────────────
-async function loadJobs() {
-  const p = new URLSearchParams({page:'1', per_page:'99999'});
+// Shared query builder so the table and the CSV export always see the same view.
+function buildJobsParams(perPage) {
+  const p = new URLSearchParams({page:'1', per_page:String(perPage)});
   // status: header filter takes precedence over the toolbar select
   if (state.colFilters.status.length) p.set('status', state.colFilters.status.join(','));
   else if (state.status) p.set('status', state.status);
@@ -109,6 +116,11 @@ async function loadJobs() {
   if (pf.to) p.set('posted_to', pf.to);
   if (state.hasSalaryOnly) p.set('has_salary','1');
   if (state.sort) { p.set('sort', state.sort); p.set('order', state.order); }
+  return p;
+}
+
+async function loadJobs() {
+  const p = buildJobsParams(99999);
   try {
     const data = await api(`/api/jobs?${p}`);
     renderJobs(data.jobs);
@@ -401,7 +413,7 @@ async function runCheck() {
   consoleEl.innerHTML=''; setScraping(true); state.activeRun='check';
   log($('#check-all').checked?'Checking ALL jobs...':'Checking New/Interested...');
   try {
-    await streamSSE('/api/pipeline/check', {workers:3, recheck_all:$('#check-all').checked});
+    await streamSSE('/api/pipeline/check', {workers:null, recheck_all:$('#check-all').checked});
   } catch(e) { log(`! ${e.message}`,'log-error'); setScraping(false); }
 }
 
@@ -509,7 +521,7 @@ function renderSkills(filter) {
 // ── Export ──────────────────────────────────────────────────────────────────
 async function exportCSV() {
   try {
-    const data = await api('/api/jobs?per_page=99999');
+    const data = await api(`/api/jobs?${buildJobsParams(99999)}`);
     const cols=['id','job_id','title','company','work_type','salary','skills','status','scrape_status','posted_date','date_found','job_url','notes'];
     const csv=[cols.join(',')].concat(data.jobs.map(j=>cols.map(c=>`"${String(j[c]??'').replace(/"/g,'""')}"`).join(',')));
     const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv.join('\n')],{type:'text/csv'}));

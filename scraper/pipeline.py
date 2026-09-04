@@ -134,6 +134,14 @@ def harvest(
 
             stubs = parse_search_results(resp.text)
             if not stubs:
+                if page == 0 and expected_total:
+                    # The site claims results but our selectors matched nothing —
+                    # almost certainly a markup change, not an empty board.
+                    yield PipelineEvent(
+                        "error",
+                        f"⚠ [{label}] site claims {expected_total} results but 0 job boxes "
+                        f"parsed — the site structure may have changed",
+                    )
                 break
 
             new_stubs = []
@@ -201,6 +209,8 @@ def enrich(
     open_count = 0
     closed_count = 0
     error_count = 0
+    fetched_200 = 0   # non-gone pages that came back successfully
+    parsed_titles = 0 # of those, pages where a title actually parsed
 
     def _fetch_one(row_id: int, url: str) -> tuple[int, JobDetail | None, str | None]:
         try:
@@ -246,6 +256,9 @@ def enrich(
                 closed_count += 1
                 icon = "🔴"
             else:
+                fetched_200 += 1
+                if detail.title:
+                    parsed_titles += 1
                 open_count += 1
                 icon = "🟢"
 
@@ -283,6 +296,13 @@ def enrich(
             pool.shutdown(wait=True, cancel_futures=True)
         except RuntimeError:
             pool.shutdown(wait=False, cancel_futures=True)
+
+    if not client.stopped and fetched_200 and not parsed_titles:
+        yield PipelineEvent(
+            "error",
+            f"⚠ {fetched_200} detail page(s) fetched but none parsed a title — "
+            f"the site structure may have changed",
+        )
 
     yield PipelineEvent(
         "summary",

@@ -45,6 +45,28 @@ class TestStats:
         assert res.status_code == 200
         data = res.json()
         assert data["total"] == 0
+        assert data["follow_ups_due"] == 0
+
+    def test_follow_ups_due_counts_active_jobs_past_their_date(self, client):
+        from db.connection import get_conn
+        from db.repos import jobs as job_repo
+
+        conn = get_conn()
+        job_repo.upsert_stub(conn, job_id=1, job_url="http://t/1", title="Due Applied")
+        job_repo.update_status(conn, 1, "Applied")
+        job_repo.update_follow_up(conn, 1, "2020-01-01")          # overdue → counts
+        job_repo.upsert_stub(conn, job_id=2, job_url="http://t/2", title="Due Interview")
+        job_repo.update_status(conn, 2, "Interviewing")
+        job_repo.update_follow_up(conn, 2, "2099-01-01")          # future → no
+        job_repo.upsert_stub(conn, job_id=3, job_url="http://t/3", title="Due Rejected")
+        job_repo.update_status(conn, 3, "Rejected")
+        job_repo.update_follow_up(conn, 3, "2020-01-01")          # closed status → no
+        job_repo.upsert_stub(conn, job_id=4, job_url="http://t/4", title="No date")
+        job_repo.update_status(conn, 4, "Applied")                # no follow_up → no
+        conn.close()
+
+        res = client.get("/api/stats")
+        assert res.json()["follow_ups_due"] == 1
 
 
 class TestJobsList:

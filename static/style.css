@@ -61,6 +61,8 @@ header {
 .stat-pill.new .stat-num      { color: var(--accent); }
 .stat-pill.applied .stat-num  { color: var(--blue); }
 .stat-pill.interviewing .stat-num { color: var(--green); }
+.stat-pill.followup-due        { border-color: #e2b93b; }
+.stat-pill.followup-due .stat-num { color: #e2b93b; }
 .stat-pill.hired .stat-num    { color: var(--green); }
 
 /* ── Layout ── */
