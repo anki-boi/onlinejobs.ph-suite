@@ -50,6 +50,10 @@ header {
   background: var(--bg2); border-bottom: 1px solid var(--border);
   position: sticky; top: 0; z-index: 100; flex-shrink: 0;
 }
+header::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+  background: linear-gradient(90deg, #4A7DA8, #7A9EB1 40%, #A7B89D 75%, #D8A465);
+}
 .header-left { display: flex; align-items: center; gap: 10px; }
 .logo { font-family: var(--display); font-size: 1.1rem; font-weight: 600; color: var(--accent); }
 .logo-label { font-size: 0.85rem; font-weight: 600; color: var(--text2); letter-spacing: 0.08em; text-transform: uppercase; }
@@ -84,6 +88,11 @@ header {
   font-size: 0.78rem; font-weight: 700;
   letter-spacing: 0.06em; text-transform: uppercase; color: var(--text);
 }
+.panel:nth-child(1) .panel-header h2 { color: var(--blue); }
+.panel:nth-child(2) .panel-header h2 { color: var(--green); }
+.panel:nth-child(3) .panel-header h2 { color: #B57F3F; }
+.panel:nth-child(4) .panel-header h2 { color: var(--blue); }
+.panel:nth-child(5) .panel-header h2 { color: var(--green); }
 .panel-hint { font-size: 0.74rem; color: var(--text3); margin-bottom: 8px; line-height: 1.4; }
 
 /* ── Form elements ── */
@@ -217,7 +226,7 @@ header {
   vertical-align: middle; color: var(--text2);
 }
 .jobs-table tbody tr { transition: background 0.1s; }
-.jobs-table tbody tr:hover { background: var(--bg3); cursor: pointer; }
+.jobs-table tbody tr:hover { background: rgba(122,158,177,0.12); cursor: pointer; }
 .jobs-table tbody tr.hidden-row { opacity: 0.4; }
 
 .col-scrape  { width: 30px; }
