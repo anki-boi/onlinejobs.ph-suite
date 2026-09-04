@@ -98,12 +98,23 @@ def harvest(
     # Determine which URLs to search
     if categories:
         yield PipelineEvent("log", f"Harvest: {len(categories)} cats, kw={keyword!r}, skills={len(skill_ids or [])}")
-        search_targets = [(cat, cat) for cat in categories]
+        base_targets = [(cat, cat) for cat in categories]
     else:
         yield PipelineEvent("log", f"Harvest: kw={keyword!r}, skills={len(skill_ids or [])}")
-        search_targets = [("all", None)]
+        base_targets = [("all", None)]
 
-    for label, slug in search_targets:
+    # OJ.ph ANDs a comma-separated skill_tags value (multiple skills in one
+    # query -> almost always zero results), so run one search per skill and
+    # union the results — OR semantics, which is what "pick skills" means.
+    skill_sets = [[s] for s in (skill_ids or [])] or [None]
+    search_targets = []
+    for label, slug in base_targets:
+        for ss in skill_sets:
+            search_targets.append((f"{label} / skill {ss[0]}" if ss else label, slug, ss))
+
+    emitted_ids: set[int] = set()  # dedupe across per-skill searches
+
+    for label, slug, target_skills in search_targets:
         page = 0
         expected_total = None
 
@@ -112,7 +123,7 @@ def harvest(
                 yield PipelineEvent("log", "[STOPPED]")
                 break
 
-            url = search_url(client.base_url, keyword, page, category=slug, skill_ids=skill_ids)
+            url = search_url(client.base_url, keyword, page, category=slug, skill_ids=target_skills)
             yield PipelineEvent("log", f"  [{label}] page {page + 1}")
 
             try:
@@ -147,7 +158,7 @@ def harvest(
             new_stubs = []
             for stub in stubs:
                 total_seen += 1
-                if stub.job_id and stub.job_id in existing_ids:
+                if stub.job_id and (stub.job_id in existing_ids or stub.job_id in emitted_ids):
                     continue
                 # Keyword filter (client-side): title must contain any keyword
                 if keyword:
@@ -159,6 +170,7 @@ def harvest(
                 new_stubs.append(stub)
 
             if new_stubs:
+                emitted_ids.update(s.job_id for s in new_stubs if s.job_id)
                 yield PipelineEvent(
                     "harvest_result",
                     f"  [{label}] page {page + 1}: {len(new_stubs)} new",

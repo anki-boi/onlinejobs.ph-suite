@@ -231,3 +231,37 @@ def test_enrich_watchdog_ignores_closed_and_ok_pages():
     })
     events = list(enrich(client, [(1, "http://a/job/1"), (2, "http://a/job/2"), (3, "http://a/job/3")], workers=3))
     assert not any(e.type == "error" for e in events)
+
+
+def test_harvest_multiple_skills_is_or_not_and():
+    """Multiple selected skills = one search per skill (OR). OJ.ph ANDs a
+    comma-separated skill_tags value, so a single multi-skill query returns
+    nothing (the reported bug)."""
+    box = ('<div class="jobpost-cat-box latest-job-post">'
+           '<h4>{t} <span class="badge">Any</span></h4>'
+           '<p data-temp="2026-08-25 14:30:00"><em>Co</em></p>'
+           '<a class="joblink" href="/jobseekers/job/{s}-{i}">Apply</a>'
+           '</div>')
+    pages = {
+        1: "<html><body><script>window.dataLayer = [{\"search_result_count\":1}]</script>"
+           f'<div class="job-list">{box.format(t="Digital Marketing Director", s="digital-marketing", i=901)}</div></body></html>',
+        2: "<html><body><script>window.dataLayer = [{\"search_result_count\":1}]</script>"
+           f'<div class="job-list">{box.format(t="Python Developer (Jr)", s="python-developer", i=902)}</div></body></html>',
+    }
+    import re
+    class Rec:
+        stopped = False
+        base_url = "http://x"
+        urls = []
+        def get(self, url):
+            self.urls.append(url)
+            m = re.search(r"skill_tags=(\d+)", url)
+            return FakeResp(pages[int(m.group(1))] if m else pages[1])
+    client = Rec()
+    events = list(harvest(client, skill_ids=[1, 2]))
+    skill_urls = [u for u in client.urls if "skill_tags=" in u]
+    assert len(skill_urls) == 2, f"expected one search per skill, got: {skill_urls}"
+    assert any("skill_tags=1" in u for u in skill_urls)
+    assert any("skill_tags=2" in u for u in skill_urls)
+    summary = [e for e in events if e.type == "summary"][0]
+    assert summary.data["new"] == 2
