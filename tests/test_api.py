@@ -612,6 +612,37 @@ class TestSchedule:
         assert client.get("/api/schedule").json()["interval_hours"] == 4
 
 
+class TestHealth:
+    def test_ok(self, client):
+        res = client.get("/health")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "ok"
+        assert "pid" in data
+
+
+class TestCSVExport:
+    def test_empty(self, client):
+        res = client.get("/api/jobs/export")
+        assert res.status_code == 200
+        lines = res.text.strip().splitlines()
+        assert "title" in lines[0]  # header row
+        assert len(lines) == 1      # no data rows
+
+    def test_with_jobs(self, client):
+        from db.connection import get_conn
+        from db.repos import jobs as job_repo
+        conn = get_conn()
+        job_repo.upsert_stub(conn, job_id=10, job_url="http://test.com/10", title="Export Me")
+        conn.close()
+        res = client.get("/api/jobs/export")
+        assert res.status_code == 200
+        lines = res.text.strip().splitlines()
+        # header + data row
+        assert len(lines) == 2
+        assert "Export Me" in lines[1]
+
+
 class TestEventsSSE:
     def test_stream_starts_with_connected(self, client):
         # TestClient's in-memory transport coalesces infinite streams, so

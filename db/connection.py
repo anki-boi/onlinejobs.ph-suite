@@ -1,8 +1,8 @@
 """
-db/connection.py — SQLite connection management.
+db/connection.py -- SQLite connection management.
 
 Creates the database with the full schema on first run.
-Migrations run exactly once per DB, gated by PRAGMA user_version —
+Migrations run exactly once per DB, gated by PRAGMA user_version --
 repeated init_db() calls (one per request) are cheap no-ops.
 Per-request connections (not a shared global) to avoid cross-thread issues.
 
@@ -85,22 +85,46 @@ SCHEMA = """
         CREATE INDEX IF NOT EXISTS idx_history_job_id    ON job_history(job_id);
     """
 
-def _load_config() -> dict:
-    cfg_path = BASE_DIR / "config.json"
-    if cfg_path.exists():
-        cfg = json.loads(cfg_path.read_text())
-    else:
-        cfg = {}
-    local = BASE_DIR / "config.local.json"  # gitignored overlay (keys etc.)
-    if local.exists():
-        cfg = {**cfg, **json.loads(local.read_text())}
-    return cfg
-    return {}
+_config: dict | None = None
 
-_config = _load_config()
+
+def load_config() -> dict:
+    """Lazy-loaded config (avoids circular import when this module is loaded first)."""
+    global _config
+    if _config is None:
+        cfg_path = BASE_DIR / "config.json"
+        cfg: dict = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+        local = BASE_DIR / "config.local.json"
+        if local.exists():
+            cfg = {**cfg, **json.loads(local.read_text())}
+        _config = cfg
+    return _config
+
+
+def get_config() -> dict:
+    """Public accessor for the merged config (lazy-loaded)."""
+    return load_config()
+
+
 _env_db = os.environ.get("JOBS_DB_PATH")
-DB_PATH = Path(_env_db) if _env_db and os.path.isabs(_env_db) \
-    else BASE_DIR / (_env_db or _config.get("db_path", "jobs.db"))
+
+# Mutable module-level for direct access and test monkeypatching.
+DB_PATH: str | Path | None = None  # set by tests; resolved lazily otherwise
+
+
+def _resolve_db_path() -> Path:
+    """Resolve the actual DB path (lazy so config doesn't race with init)."""
+    if DB_PATH is not None:
+        return Path(DB_PATH)
+    path_str = _env_db or load_config().get("db_path", "jobs.db")
+    if _env_db and os.path.isabs(_env_db):
+        return Path(_env_db)
+    return BASE_DIR / path_str
+
+
+def get_db_path() -> Path:
+    """Public accessor for the resolved DB path."""
+    return _resolve_db_path()
 
 
 def get_conn(db_path: str | Path | None = None) -> sqlite3.Connection:
@@ -110,7 +134,7 @@ def get_conn(db_path: str | Path | None = None) -> sqlite3.Connection:
     makes callers wait up to 30s instead of failing instantly with
     `database is locked`.
     """
-    path = str(db_path or DB_PATH)
+    path = str(db_path or _resolve_db_path())
     conn = sqlite3.connect(path, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -123,7 +147,7 @@ def init_db(conn: sqlite3.Connection | None = None) -> sqlite3.Connection:
 
     Migrations are gated on PRAGMA user_version: they run at most once per
     database file. This matters because every request path touches init_db()
-    — an ungated migration would re-run its UPDATE statements (write locks,
+    -- an ungated migration would re-run its UPDATE statements (write locks,
     and stale data overwrites) on every single request.
     """
     if conn is None:

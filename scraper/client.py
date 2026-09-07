@@ -88,7 +88,9 @@ class OJClient:
                 continue
 
             if resp.status_code == 429:
-                wait = (2 ** attempt) * self.delay
+                # Respect server-provided Retry-After (seconds or HTTP-date).
+                retry_after = resp.headers.get("Retry-After")
+                wait = self._parse_retry_after(retry_after) or (2 ** attempt) * self.delay
                 log.warning("429 rate limit on %s — backing off %ds (attempt %d/%d)",
                             url, wait, attempt + 1, self.max_retries + 1)
                 time.sleep(wait)
@@ -96,7 +98,9 @@ class OJClient:
 
             if resp.status_code >= 500:
                 last_exc = requests.HTTPError(f"HTTP {resp.status_code}", response=resp)
-                wait = (2 ** attempt) * self.delay
+                # Respect server-provided Retry-After on 5xx too.
+                retry_after = resp.headers.get("Retry-After")
+                wait = self._parse_retry_after(retry_after) or (2 ** attempt) * self.delay
                 log.warning("HTTP %d on %s — retrying in %ds", resp.status_code, url, wait)
                 time.sleep(wait)
                 continue
@@ -113,6 +117,23 @@ class OJClient:
         return resp
 
     # ── Control ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_retry_after(header: str | None) -> float | None:
+        """Parse a Retry-After header into seconds, or return None."""
+        if not header:
+            return None
+        try:
+            return float(header)
+        except ValueError:
+            pass
+        # Try HTTP-date (e.g. "Wed, 21 Oct 2025 07:28:00 GMT")
+        from email.utils import parsedate_to_datetime
+        try:
+            dt = parsedate_to_datetime(header)
+            return max(0, (dt.timestamp() - time.time()))
+        except Exception:
+            return None
 
     def stop(self):
         self._stop = True

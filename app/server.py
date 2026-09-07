@@ -10,7 +10,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -98,7 +98,7 @@ _ats_cache_key = None
 
 def _ats_cache_refresh(conn) -> None:
     global _ats_cache_key
-    key = (dbconn.DB_PATH.stat().st_mtime, MASTERS_PATH.stat().st_mtime if MASTERS_PATH.exists() else 0,
+    key = (dbconn._resolve_db_path().stat().st_mtime, MASTERS_PATH.stat().st_mtime if MASTERS_PATH.exists() else 0,
            conn.execute("SELECT COALESCE(MAX(id),0) FROM jobs").fetchone()[0])
     if key != _ats_cache_key:
         _ats_cache = {}
@@ -137,11 +137,19 @@ def get_db() -> sqlite3.Connection:
     """Per-request connection. Schema init happens once per process per DB
     path (re-checked so a changed JOBS_DB_PATH re-initialises)."""
     global _initialized_for
-    key = str(dbconn.DB_PATH)
+    key = str(dbconn._resolve_db_path())
     if _initialized_for != key:
         _initialized_for = key
         dbconn.init_db(dbconn.get_conn())
     return dbconn.get_conn()
+
+
+# ── Health check ────────────────────────────────────────────────────────────
+
+@app.get("/health")
+def health():
+    """Lightweight liveness probe — no DB call needed."""
+    return {"status": "ok", "pid": __import__("os").getpid()}
 
 
 # ── HTML ────────────────────────────────────────────────────────────────────
@@ -149,6 +157,37 @@ def get_db() -> sqlite3.Connection:
 @app.get("/", response_class=HTMLResponse)
 def index():
     return (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+
+# ── CSV export (server-side streaming) ──────────────────────────────────────
+
+import csv as _csv
+import io as _io
+
+_EXPORT_COLS = ["id", "job_id", "title", "company", "description", "salary",
+                "location", "hours_per_week", "work_type", "posted_date",
+                "date_updated", "skills", "status", "notes", "follow_up"]
+
+
+@app.get("/api/jobs/export")
+def export_jobs():
+    """Stream the full job set as CSV. No pagination — one complete dump."""
+    conn = get_db()
+    rows = conn.execute(f"SELECT {','.join(_EXPORT_COLS)} FROM jobs ORDER BY id").fetchall()
+
+    output = _io.StringIO()
+    writer = _csv.DictWriter(output, fieldnames=_EXPORT_COLS)
+    writer.writeheader()
+    for r in rows:
+        writer.writerow(dict(r))
+
+    content = output.getvalue().encode("utf-8")
+
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="jobs_export.csv"'},
+    )
 
 
 # ── Jobs API ────────────────────────────────────────────────────────────────

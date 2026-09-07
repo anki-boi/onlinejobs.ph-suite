@@ -10,6 +10,8 @@ Usage:
 
 import argparse
 import json
+import logging
+import logging.handlers
 import sys
 from pathlib import Path
 
@@ -56,7 +58,30 @@ def initial_skills_refresh(cfg: dict) -> None:
         print("  (Will retry on first /api/skills/refresh call)")
 
 
+def _setup_logging() -> None:
+    """Rotate log files so they never grow unbounded (5 MB x 3 backups)."""
+    logger = logging.getLogger()
+    # Remove default handlers
+    for h in list(logger.handlers):
+        logger.removeHandler(h)
+    handler = logging.handlers.RotatingFileHandler(
+        PROJECT_ROOT / "job_hunter.log",
+        maxBytes=5 * 1024 * 1024,  # 5 MB
+        backupCount=3,
+        encoding="utf-8",
+    )
+    handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+    logger.addHandler(handler)
+    # Also stream INFO+ to stderr for interactive runs
+    sh = logging.StreamHandler(sys.stderr)
+    sh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    sh.addFilter(lambda r: r.levelno >= logging.INFO)
+    logger.addHandler(sh)
+    logger.setLevel(logging.INFO)
+
+
 def main():
+    _setup_logging()
     parser = argparse.ArgumentParser(description="Job Hunter — OnlineJobs.ph tracker")
     parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8371, help="Port (default: 8371)")

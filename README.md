@@ -28,9 +28,10 @@ Configuration lives in `config.json`:
 | `base_url` / `api_url` | Site + skills API origin |
 | `db_path` | SQLite file (relative → resolved against the project dir) |
 | `request_delay` | Global throttle between outbound requests (seconds) |
-| `max_retries` | Retries on 429/5xx (exponential backoff) |
+| `max_retries` | Retries on 429/5xx (exponential backoff; also respects server `Retry-After` headers) |
 | `enrich_workers` | Parallel detail-page workers |
 | `enrich_interval_days` | "Check for updates" re-checks jobs older than this |
+| `backup_retention_days` | How many backups to keep (default 7 if omitted) |
 
 ## Workflow
 
@@ -63,7 +64,9 @@ Configuration lives in `config.json`:
 - Keep keywords narrow — every page/detail page is a real request to the site,
   throttled to 1/second.
 - Hidden jobs stay in the DB for dedup — they won't resurface in future scrapes.
-- Export the current view to CSV from the toolbar.
+- **CSV export** — toolbar button downloads a full server-side CSV dump of all
+  jobs (no pagination, streams via `/api/jobs/export`). The client-side JS
+  fallback still works for quick one-off exports.
 
 ## Auto-run & alerts
 
@@ -78,7 +81,8 @@ The **Auto-run** panel (sidebar) keeps the tracker fresh on its own:
 
 The app starts at Windows logon (`JobHunter` scheduled task → `pythonw main.py`),
 and `JobHunter-Backup` runs `scripts/backup.py` daily at 03:00 — a `VACUUM INTO`
-snapshot into `backups/`, keeping the last 7.
+snapshot into `backups/`, keeping the last N (from `config.json`
+`backup_retention_days`; default 7).
 
 ## Data quality
 
@@ -141,6 +145,16 @@ snapshot into `backups/`, keeping the last 7.
   in `config.local.json`: folders or files of your resume PDFs/DOCX/TXTs that
   the 1-page CV builder digests. Defaults to the project's `resumes/` folder.
 
+## Health check
+
+`GET /health` returns `{"status": "ok", "pid": ...}` — useful for monitoring,
+Docker health checks, or Windows Task Manager restart scripts.
+
+## Logging
+
+Log files rotate at 5 MB each (3 backups) and land in `job_hunter.log*`. A copy
+of INFO+ messages streams to stderr when running interactively.
+
 ## Files
 
 | Path | Purpose |
@@ -153,7 +167,7 @@ snapshot into `backups/`, keeping the last 7.
 | `db/migrate.py` | One-time data repairs run on version bumps |
 | `db/repos/jobs.py` | Job CRUD + query + status history |
 | `db/repos/skills.py` | Skill taxonomy store |
-| `scraper/client.py` | HTTP client: throttle, backoff, stop signal |
+| `scraper/client.py` | HTTP client: throttle, backoff, stop signal, respects `Retry-After` headers |
 | `scraper/parsers.py` | HTML → structured data (search list, detail, closed detection) |
 | `scraper/pipeline.py` | `harvest()` / `enrich()` event generators |
 | `scraper/skills.py` | Skills API client |
