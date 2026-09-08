@@ -19,6 +19,28 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Defaults for the scheduled-task entrypoint (python scripts/backup.py).
+# DB_PATH honors JOBS_DB_PATH / config.json like the rest of the app so the
+# backup always targets whatever DB the server is actually using.
+
+
+def _default_db_path() -> str:
+    import os
+
+    env = os.environ.get("JOBS_DB_PATH")
+    if env:
+        return env if os.path.isabs(env) else str(ROOT / env)
+    try:
+        import db.connection as _dc
+
+        return str(_dc.get_config().get("db_path", "jobs.db"))
+    except Exception:
+        return str(ROOT / "jobs.db")
+
+
+DB_PATH = _default_db_path()
+BACKUP_DIR = ROOT / "backups"
+
 
 def _load_keep() -> int:
     """Retention days from config.json, falling back to CLI arg then hardcoded default."""
@@ -61,6 +83,10 @@ def make_backup(db_path: str, dest_dir: str, keep: int | None = None) -> Path:
 
 
 if __name__ == "__main__":
-    p = make_backup(str(DB_PATH), str(BACKUP_DIR))
-    n = len(list(BACKUP_DIR.glob("jobs-*.db")))
+    args = sys.argv[1:]
+    db_path = args[0] if len(args) > 0 else DB_PATH
+    dest_dir = args[1] if len(args) > 1 else str(BACKUP_DIR)
+    keep = int(args[2]) if len(args) > 2 else None
+    p = make_backup(str(db_path), str(dest_dir), keep)
+    n = len(list(Path(dest_dir).glob("jobs-*.db")))
     print(f"backup ok: {p.name}  ({n} kept)")
