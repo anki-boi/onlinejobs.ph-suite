@@ -12,6 +12,33 @@ STATUSES = [
 
 SCRAPE_STATUSES = ["Open", "Closed", ""]
 
+# Monotonic version of the jobs table (W2.3): bumped in the same transaction
+# as any write that changes a job's score-relevant fields (title, company,
+# skills, salary, description). Memoised per-row caches (ATS scores) key on
+# this, so in-place enrichment invalidates them — the old cache keyed on
+# MAX(id)/COUNT(*) only invalidated when rows were added/deleted.
+JOBS_VERSION_KEY = "jobs_version"
+
+
+def get_jobs_version(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        "SELECT value FROM app_settings WHERE key = ?", (JOBS_VERSION_KEY,)
+    ).fetchone()
+    if not row:
+        return 0
+    try:
+        return int(row["value"])
+    except (ValueError, TypeError):
+        return 0
+
+
+def _bump_jobs_version(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "INSERT INTO app_settings (key, value) VALUES (?, '1') "
+        "ON CONFLICT (key) DO UPDATE SET value = CAST(value AS INTEGER) + 1",
+        (JOBS_VERSION_KEY,),
+    )
+
 
 def norm_title(title: str | None) -> str:
     """Case/punctuation-insensitive title for repost matching."""
@@ -243,6 +270,7 @@ def upsert_stub(
         if updates:
             vals.append(row_id)
             conn.execute(f"UPDATE jobs SET {', '.join(updates)} WHERE id = ?", vals)
+            _bump_jobs_version(conn)
         conn.commit()
         return row_id, False
 
@@ -308,6 +336,8 @@ def enrich_job(
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     vals = list(fields.values()) + [row_id]
     conn.execute(f"UPDATE jobs SET {set_clause} WHERE id = ?", vals)
+    if any(v is not None for v in (title, company, description, salary, skills)):
+        _bump_jobs_version(conn)
 
     # Repost detection needs the effective (possibly pre-existing) title + employer
     row = conn.execute("SELECT title, employer_id FROM jobs WHERE id=?", (row_id,)).fetchone()

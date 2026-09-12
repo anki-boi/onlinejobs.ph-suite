@@ -82,44 +82,25 @@ BASE_RESUMES = dbconn.BASE_DIR / "resumes"
 def _masters() -> dict:
     return resume_schema.load_masters(MASTERS_PATH)
 
-# ponytail: per-process memo of best-profile ATS per job; invalidated when the
-# DB or masters file changes. 2,800 rows ≈ 5.5s cold, ~0s warm.
+# per-process memo of best-profile ATS per job (W2.3): invalidated by the jobs
+# version counter (any in-place score-field change) or a masters.json change.
 _ats_memo: dict[int, tuple] = {}
 _ats_memo_key = None
 
 def _best_ats_for_row(conn, r) -> tuple:
     global _ats_memo_key
-    # ponytail: mtime bumps on every WAL write, so key on row shape instead —
-    # scores may lag in-place enrichment updates until a job row is added/deleted.
-    row = tuple(conn.execute("SELECT COALESCE(MAX(id),0), COUNT(*) FROM jobs").fetchone())
-    key = (row,
-           MASTERS_PATH.stat().st_mtime if MASTERS_PATH.exists() else 0,)
+    # W2.3: key on the jobs version counter — any in-place change to a job's
+    # score fields (enrichment, re-harvest) bumps it, so this memo re-scores;
+    # masters.json mtime covers resume-side changes.
+    key = (job_repo.get_jobs_version(conn),
+           MASTERS_PATH.stat().st_mtime if MASTERS_PATH.exists() else 0)
     if key != _ats_memo_key:
         _ats_memo.clear()
         _ats_memo_key = key
     if r["id"] not in _ats_memo:
         _ats_memo[r["id"]] = resume_schema.best_profile_for_job(_masters(), _job_dict_for_resume(r))
-    return _ats_memo[r["id"]] 
+    return _ats_memo[r["id"]]
 
-# In-process cache of (profile, total_score) per job for the min_ats filter.
-# ponytail: rebuilt when the DB file or masters file changes; jobs updated in
-# place (enrichment) only invalidate via DB mtime — good enough for a filter.
-_ats_cache: dict[int, tuple] = {}
-_ats_cache_key = None
-
-def _ats_cache_refresh(conn) -> None:
-    global _ats_cache_key
-    key = (dbconn._resolve_db_path().stat().st_mtime, MASTERS_PATH.stat().st_mtime if MASTERS_PATH.exists() else 0,
-           conn.execute("SELECT COALESCE(MAX(id),0) FROM jobs").fetchone()[0])
-    if key != _ats_cache_key:
-        _ats_cache = {}
-        _ats_cache_key = key
-
-def _best_for_row(r) -> tuple:
-    """(profile_name, score) — best of all master profiles, memoised."""
-    if r["id"] not in _ats_cache:
-        _ats_cache[r["id"]] = resume_schema.best_profile_for_job(_masters(), _job_dict_for_resume(r))
-    return _ats_cache[r["id"]]
 
 # Default UA — a missing/empty config value must never override it with "".
 _DEFAULT_UA = (

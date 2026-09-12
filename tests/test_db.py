@@ -450,3 +450,57 @@ class TestSkillRepos:
         results = skill_repo.search_skills(conn, "python")
         assert len(results) == 1
         assert results[0]["name"] == "Python"
+
+
+class TestJobsVersionW23:
+    """W2.3: in-place enrichment of a job's score fields bumps a monotonic
+    jobs version; the memoised ATS score keys on it and re-scores."""
+
+    def test_enrich_bumps_version(self, conn):
+        rid, _ = job_repo.upsert_stub(conn, job_id=1, job_url="http://oj/job/1", title="Dev")
+        v0 = job_repo.get_jobs_version(conn)
+        job_repo.enrich_job(conn, rid, skills=["Python"])
+        assert job_repo.get_jobs_version(conn) == v0 + 1
+
+    def test_reharvest_update_bumps(self, conn):
+        job_repo.upsert_stub(conn, job_id=2, job_url="http://oj/job/2", title="Dev")
+        v0 = job_repo.get_jobs_version(conn)
+        job_repo.upsert_stub(conn, job_id=2, job_url="http://oj/job/2", title="Senior Dev")
+        assert job_repo.get_jobs_version(conn) == v0 + 1
+
+    def test_status_notes_followup_do_not_bump(self, conn):
+        rid, _ = job_repo.upsert_stub(conn, job_id=3, job_url="http://oj/job/3", title="Dev")
+        v0 = job_repo.get_jobs_version(conn)
+        job_repo.update_status(conn, rid, "Applied")
+        job_repo.update_notes(conn, rid, "note")
+        job_repo.update_follow_up(conn, rid, "2026-01-01")
+        assert job_repo.get_jobs_version(conn) == v0
+
+    def test_new_stub_alone_does_not_bump(self, conn):
+        # a fresh row has no memo entry yet — only content changes matter
+        v0 = job_repo.get_jobs_version(conn)
+        job_repo.upsert_stub(conn, job_id=4, job_url="http://oj/job/4", title="Dev")
+        assert job_repo.get_jobs_version(conn) == v0
+
+    def test_memo_rescores_after_in_place_enrichment(self, conn, monkeypatch):
+        from app import server as srv
+        srv._ats_memo.clear()
+        srv._ats_memo_key = None
+
+        def fake_best(masters, job):
+            text = " ".join(filter(None, [
+                job.get("title") or "", job.get("skills") or "", job.get("description") or ""]))
+            return ("master", 10 if "python" in text.lower() else 0)
+
+        monkeypatch.setattr(srv.resume_schema, "best_profile_for_job", fake_best)
+
+        rid, _ = job_repo.upsert_stub(conn, job_id=5, job_url="http://oj/job/5",
+                                      title="Python Developer")
+        row = job_repo.get_job(conn, rid)
+        assert srv._best_ats_for_row(conn, row)[1] == 10
+        # the memo is warm now — prove the enrich busts it, not just a miss
+        assert srv._best_ats_for_row(conn, row)[1] == 10
+
+        job_repo.enrich_job(conn, rid, title="AI Engineer")
+        row2 = job_repo.get_job(conn, rid)
+        assert srv._best_ats_for_row(conn, row2)[1] == 0
