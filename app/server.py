@@ -11,8 +11,9 @@ import re
 import sqlite3
 from pathlib import Path
 
+import requests
 from fastapi import FastAPI, HTTPException, Response
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.schemas import (
@@ -44,7 +45,7 @@ from resumes import render as resume_render
 from resumes import schema as resume_schema
 from resumes.schema import validate
 from resumes.tailor import LLMClient, job_brief, tailor
-from scraper.client import OJClient, StopToken
+from scraper.client import DEFAULT_BASE_URL, OJClient, StopToken
 from scraper.pipeline import enrich, harvest
 from scraper.skills import fetch_skills, skills_to_db_rows
 
@@ -149,10 +150,46 @@ get_db = deps.get_db
 
 # ── Health check ────────────────────────────────────────────────────────────
 
+def _probe_db() -> str:
+    """W1.5: 'ok' or 'locked'. Short (1 s) busy timeout so a locked DB
+    reports locked instead of hanging the probe for the usual 30 s."""
+    conn = None
+    try:
+        conn = sqlite3.connect(dbconn._resolve_db_path(), timeout=1)
+        conn.execute("SELECT 1")
+        return "ok"
+    except sqlite3.OperationalError:
+        return "locked"
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def _probe_site(url: str | None = None) -> str:
+    """W1.5: 'ok' or 'unreachable'. Any HTTP answer counts as reachable."""
+    try:
+        requests.get(url or DEFAULT_BASE_URL + "/", timeout=5)
+        return "ok"
+    except requests.RequestException:
+        return "unreachable"
+
+
 @app.get("/health")
-def health():
-    """Lightweight liveness probe — no DB call needed."""
-    return {"status": "ok", "pid": __import__("os").getpid()}
+async def health():
+    """W1.5: real health — 200 ok; 200 degraded if the DB is locked (app
+    still serves cached data); 503 degraded if the site is unreachable
+    (scraping is down). Probes run in worker threads, never the event loop."""
+    import asyncio
+
+    db = await asyncio.to_thread(_probe_db)
+    site = await asyncio.to_thread(_probe_site)
+    body = {"status": "ok", "db": db, "site": site, "pid": os.getpid()}
+    if site != "ok":
+        body["status"] = "degraded"
+        return JSONResponse(body, status_code=503)
+    if db != "ok":
+        body["status"] = "degraded"
+    return body
 
 
 # ── HTML ────────────────────────────────────────────────────────────────────

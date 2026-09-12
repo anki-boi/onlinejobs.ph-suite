@@ -588,12 +588,71 @@ class TestSchedule:
 
 
 class TestHealth:
-    def test_ok(self, client):
+    def test_ok(self, client, monkeypatch):
+        monkeypatch.setattr("app.server._probe_db", lambda: "ok")
+        monkeypatch.setattr("app.server._probe_site", lambda: "ok")
         res = client.get("/health")
         assert res.status_code == 200
         data = res.json()
         assert data["status"] == "ok"
+        assert data["db"] == "ok" and data["site"] == "ok"
         assert "pid" in data
+
+    def test_site_unreachable_is_503_degraded(self, client, monkeypatch):
+        monkeypatch.setattr("app.server._probe_db", lambda: "ok")
+        monkeypatch.setattr("app.server._probe_site", lambda: "unreachable")
+        res = client.get("/health")
+        assert res.status_code == 503
+        data = res.json()
+        assert data["status"] == "degraded" and data["site"] == "unreachable"
+
+    def test_db_locked_is_200_degraded(self, client, monkeypatch):
+        monkeypatch.setattr("app.server._probe_db", lambda: "locked")
+        monkeypatch.setattr("app.server._probe_site", lambda: "ok")
+        res = client.get("/health")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "degraded" and data["db"] == "locked"
+
+    def test_both_bad_site_wins_503(self, client, monkeypatch):
+        monkeypatch.setattr("app.server._probe_db", lambda: "locked")
+        monkeypatch.setattr("app.server._probe_site", lambda: "unreachable")
+        res = client.get("/health")
+        assert res.status_code == 503
+        data = res.json()
+        assert data["status"] == "degraded"
+        assert data["db"] == "locked" and data["site"] == "unreachable"
+
+
+class TestHealthProbes:
+    def test_probe_db_ok(self, client):
+        import app.server as srv
+        assert srv._probe_db() == "ok"          # temp test DB, fresh short conn
+
+    def test_probe_db_locked(self, monkeypatch):
+        import sqlite3 as _sq
+        import app.server as srv
+
+        def boom(path, **kw):
+            raise _sq.OperationalError("database is locked")
+
+        monkeypatch.setattr("app.server.sqlite3.connect", boom)
+        assert srv._probe_db() == "locked"
+
+    def test_probe_site_ok_and_unreachable(self, monkeypatch):
+        import app.server as srv
+
+        class R:
+            status_code = 200
+
+        monkeypatch.setattr("app.server.requests.get", lambda *a, **k: R())
+        assert srv._probe_site("http://x/") == "ok"
+
+        def down(*a, **k):
+            raise srv.requests.RequestException("boom")
+
+        monkeypatch.setattr("app.server.requests.get", down)
+        assert srv._probe_site("http://x/") == "unreachable"
 
 
 class TestCSVExport:

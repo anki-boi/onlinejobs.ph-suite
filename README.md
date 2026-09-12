@@ -147,8 +147,17 @@ snapshot into `backups/`, keeping the last N (from `config.json`
 
 ## Health check
 
-`GET /health` returns `{"status": "ok", "pid": ...}` — useful for monitoring,
-Docker health checks, or Windows Task Manager restart scripts.
+`GET /health` probes the database (short busy timeout) and the site (5 s
+timeout), both in worker threads:
+
+- `200 {"status": "ok", "db": "ok", "site": "ok", "pid": ...}`
+- `200 {"status": "degraded", "db": "locked", ...}` — the DB is locked;
+  the app still serves cached data
+- `503 {"status": "degraded", "site": "unreachable", ...}` — the site is
+  down, so scraping can't run
+
+Useful for monitoring, Docker health checks, or Windows Task Manager
+restart scripts (a 503 means the restart script should act).
 
 ## Shutdown (Ctrl-C)
 

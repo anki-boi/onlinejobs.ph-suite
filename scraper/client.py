@@ -48,11 +48,15 @@ class RateLimitExhausted(Exception):
     """Raised after max retries on 429."""
 
 
+DEFAULT_BASE_URL = "https://www.onlinejobs.ph"
+DEFAULT_API_URL = "https://api.onlinejobs.ph"
+
+
 class OJClient:
     def __init__(
         self,
-        base_url: str = "https://www.onlinejobs.ph",
-        api_url: str = "https://api.onlinejobs.ph",
+        base_url: str = DEFAULT_BASE_URL,
+        api_url: str = DEFAULT_API_URL,
         delay: float = 1.0,
         max_retries: int = 3,
         user_agent: str = (
