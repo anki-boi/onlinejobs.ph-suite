@@ -1,20 +1,23 @@
 """
-db/migrate.py — Non-destructive migrations for older database files.
+db/migrate.py — Versioned, idempotent migrations for older database files.
 
-Runs exactly once per DB file (gated by PRAGMA user_version in
-connection.init_db) and bumps the version when done.
+`MIGRATIONS` maps schema version → step function. `run(conn, target)` applies
+steps current+1 .. target in order, bumping `PRAGMA user_version` after each
+one succeeds. A step that raises leaves the version at the last completed
+step, so the next boot retries it — every step is therefore idempotent
+(IF NOT EXISTS / column guards / NULL-filtered UPDATEs, no-ops on new DBs).
 
-Handles the transition from the original schema (job_link, job_title, search_tag,
-tags_found) to the new schema (job_url, title, search_keyword, skills, etc.),
-seeds legacy rows, and repairs scrape_status values that the pre-2.0 code
-stamped onto jobs that were never actually checked.
+A fresh DB file starts at version 0 and runs every step — each step is a
+no-op on a schema that already has its final shape.
+
+CLI:  python -m db.migrate --dry-run [--db PATH]
 """
 
 import logging
 
 log = logging.getLogger(__name__)
 
-# Old column → new column mappings
+# Old column → new column mappings (v1, pre-2.0 schema)
 _COLUMN_RENAMES = [
     ("job_link", "job_url"),
     ("job_title", "title"),
@@ -23,14 +26,14 @@ _COLUMN_RENAMES = [
 ]
 
 
-def migrate(conn) -> None:
-    """Detect old schema and migrate data to new columns."""
-    # v3: key/value table for auto-run state (new DBs already have it via SCHEMA)
-    conn.execute("CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)")
+# ── Versioned steps ──────────────────────────────────────────────────────────
 
+
+def _v1(conn) -> None:
+    """v1: legacy schema → current columns (job_link→job_url renames, add
+    missing columns, populate job_id, normalise old status values)."""
     existing = _existing_columns(conn, "jobs")
 
-    # Add any missing new columns
     new_cols = {
         "job_id":          "INTEGER",
         "job_url":         "TEXT",
@@ -52,10 +55,10 @@ def migrate(conn) -> None:
     }
     for col, col_type in new_cols.items():
         if col not in existing:
-            log.info("Adding column jobs.%s", col)
+            log.info("v1: adding column jobs.%s", col)
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {col_type}")
+    existing.update(new_cols)  # just added — the rename pass below must see them
 
-    # Copy data from old columns to new (if old columns exist and new are empty)
     for old_col, new_col in _COLUMN_RENAMES:
         if old_col in existing and new_col in existing:
             row = conn.execute(
@@ -66,44 +69,87 @@ def migrate(conn) -> None:
                     f"UPDATE jobs SET {new_col} = {old_col} "
                     f"WHERE ({new_col} IS NULL OR {new_col} = '') AND {old_col} IS NOT NULL AND {old_col} != ''"
                 )
-                log.info("Migrated %s → %s", old_col, new_col)
+                log.info("v1: migrated %s → %s", old_col, new_col)
 
-    # Populate job_id from job_url (extract trailing number from slug)
     _populate_job_ids(conn)
 
-    # Normalise old scrape-status values that were written into the workflow column
-    # Old code wrote "Open"/"Closed" into status. Map them to sensible defaults.
+    # Old code wrote "Open"/"Closed" into the workflow status column.
     conn.execute("UPDATE jobs SET status = 'New'  WHERE status = 'Open'")
     conn.execute("UPDATE jobs SET status = 'Hidden' WHERE status = 'Closed'")
     conn.execute("UPDATE jobs SET status = 'New'  WHERE status IS NULL OR status = ''")
 
-    # Seed scrape_status from the old status values where we can tell
-    conn.execute("UPDATE jobs SET scrape_status = 'Open' WHERE scrape_status = '' AND status = 'New' AND job_url IS NOT NULL")
 
-    # One-time repair (v2): the seed above (and the same un-gated UPDATE the
-    # pre-2.0 code ran on every request) stamped 'Open' onto jobs that were
-    # never actually checked. A job that has never been enriched has no
-    # scrape status at all — its state is 'unknown', not 'Open'.
+def _v2(conn) -> None:
+    """v2: seed scrape_status + one-time repair — un-gated pre-2.0 code
+    stamped 'Open' onto jobs that were never checked; a never-enriched job's
+    state is 'unknown' (empty), not 'Open'."""
+    conn.execute(
+        "UPDATE jobs SET scrape_status = 'Open' "
+        "WHERE scrape_status = '' AND status = 'New' AND job_url IS NOT NULL"
+    )
     conn.execute(
         "UPDATE jobs SET scrape_status = '', scrape_reason = '' "
         "WHERE (last_checked IS NULL OR last_checked = '') AND scrape_status IN ('Open', 'Closed')"
     )
 
-    # v4: structured salary + repost detection
+
+def _v3(conn) -> None:
+    """v3: key/value table for auto-run state (new DBs already have it via
+    SCHEMA)."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT)"
+    )
+
+
+def _v4(conn) -> None:
+    """v4: structured salary columns + repost detection, backfilled from
+    legacy text."""
+    existing = _existing_columns(conn, "jobs")
     for col, col_type in {
         "repost_of":  "INTEGER",
         "salary_min": "REAL",
         "salary_max": "REAL",
     }.items():
         if col not in existing:
-            log.info("Adding column jobs.%s (v4)", col)
+            log.info("v4: adding column jobs.%s", col)
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {col_type}")
     _backfill_salary(conn)
     _backfill_reposts(conn)
 
-    # Ensure unique constraint on job_url (add UNIQUE if missing by recreating)
-    # SQLite doesn't support ADD CONSTRAINT, so we just rely on INSERT OR IGNORE
-    # and the application-level dedup.
+
+# version → step (kept in one place; init_db applies up to its target)
+MIGRATIONS: dict[int, callable] = {
+    1: _v1,
+    2: _v2,
+    3: _v3,
+    4: _v4,
+}
+
+
+def run(conn, target: int) -> None:
+    """Apply unapplied migration steps up to `target`, bumping user_version
+    after each. A raising step leaves the version unchanged (retried next
+    boot) — safe because every step is idempotent."""
+    current = conn.execute("PRAGMA user_version").fetchone()[0]
+    for v in range(current + 1, target + 1):
+        step = MIGRATIONS.get(v)
+        if step is None:
+            log.warning(f"migration: no step defined for v{v} — bumping version only")
+        else:
+            desc = (step.__doc__ or "").strip().splitlines()[0] if step.__doc__ else ""
+            log.info(f"migration: applying v{v} — {desc}")
+            step(conn)
+        conn.execute(f"PRAGMA user_version = {v}")
+        conn.commit()
+
+
+def steps_to_apply(conn, target: int) -> list[int]:
+    """Versions that `run()` would apply, for --dry-run and tests."""
+    current = conn.execute("PRAGMA user_version").fetchone()[0]
+    return [v for v in range(current + 1, target + 1) if v in MIGRATIONS]
+
+
+# ── helpers ──────────────────────────────────────────────────────────────────
 
 
 def _backfill_salary(conn) -> None:
@@ -169,3 +215,51 @@ def _populate_job_ids(conn) -> None:
             )
     if rows:
         log.info("Populated job_id for %d rows", len(rows))
+
+
+# ── CLI ──────────────────────────────────────────────────────────────────────
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    import db.connection as dbconn
+
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--dry-run", action="store_true",
+                        help="list the migrations that would run, without applying them")
+    parser.add_argument("--db", default=None, help="DB file (default: the configured one)")
+    args = parser.parse_args(argv)
+
+    # ponytail: CLI prints ASCII only - Windows cp1252 consoles mangle dashes.
+    path = dbconn.get_db_path(args.db)
+    if not path.exists():
+        print(f"no such DB file: {path}")
+        return 1
+    conn = dbconn.get_conn(str(path))  # 30s busy timeout, Row factory
+
+    steps = steps_to_apply(conn, dbconn.SCHEMA_VERSION)
+    if args.dry_run:
+        print(f"db: {path}")
+        print(f"current version: {conn.execute('PRAGMA user_version').fetchone()[0]}, "
+              f"target: {dbconn.SCHEMA_VERSION}")
+        if not steps:
+            print("up to date - nothing to do")
+        for v in steps:
+            doc = MIGRATIONS[v].__doc__ or ""
+            print(f"  would apply v{v}: {doc.strip().splitlines()[0]}")
+        conn.close()
+        return 0
+
+    if steps:
+        run(conn, dbconn.SCHEMA_VERSION)
+        print(f"migrated to v{conn.execute('PRAGMA user_version').fetchone()[0]}")
+    else:
+        print(f"up to date (v{conn.execute('PRAGMA user_version').fetchone()[0]})")
+    conn.close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+

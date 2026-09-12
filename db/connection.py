@@ -14,15 +14,16 @@ import os
 import sqlite3
 from pathlib import Path
 
-from db.migrate import migrate
+import db.migrate as dbmigrate  # versioned migration registry (W2.7)
 
-# Bump when the migration in db/migrate.py changes. DBs at a lower version
-# are migrated exactly once, on the next init_db(); new DBs start at this version.
+# Bump when the migration in db/migrate.py changes. A DB file at a lower
+# version runs each unapplied step exactly once, on the next init_db(); a
+# fresh file runs all steps as no-ops and lands at this version.
 SCHEMA_VERSION = 4
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SCHEMA = """
+TABLES = """
         CREATE TABLE IF NOT EXISTS jobs (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
             job_id          INTEGER UNIQUE,
@@ -76,13 +77,20 @@ SCHEMA = """
             key   TEXT PRIMARY KEY,
             value TEXT
         );
+    """
 
+# W2.7: indexes are created only *after* migrations — a legacy jobs table may
+# not have job_id yet when init_db() first sees it.
+INDEXES = """
         CREATE INDEX IF NOT EXISTS idx_jobs_status       ON jobs(status);
         CREATE INDEX IF NOT EXISTS idx_jobs_job_id       ON jobs(job_id);
         CREATE INDEX IF NOT EXISTS idx_jobs_scrape_status ON jobs(scrape_status);
         CREATE INDEX IF NOT EXISTS idx_jobs_last_checked ON jobs(last_checked);
         CREATE INDEX IF NOT EXISTS idx_history_job_id    ON job_history(job_id);
-    """
+        """
+
+SCHEMA = TABLES + "\n" + INDEXES
+
 
 def load_config() -> dict:
     """The live merged config (W1.4): app/config.py owns the state — reload()
@@ -152,11 +160,18 @@ def init_db(conn: sqlite3.Connection | None = None) -> sqlite3.Connection:
     _create_tables(conn)
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version < SCHEMA_VERSION:
-        migrate(conn)
-        conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        # W2.7: versioned steps — each unapplied version is applied in order
+        # and user_version bumps after each, so a failing step retries next
+        # boot instead of re-running (or skipping) the whole batch.
+        dbmigrate.run(conn, SCHEMA_VERSION)
+    _create_indexes(conn)  # after migrations: legacy tables may lack indexed cols
     conn.commit()
     return conn
 
 
 def _create_tables(conn: sqlite3.Connection) -> None:
-    conn.executescript(SCHEMA)
+    conn.executescript(TABLES)
+
+
+def _create_indexes(conn: sqlite3.Connection) -> None:
+    conn.executescript(INDEXES)

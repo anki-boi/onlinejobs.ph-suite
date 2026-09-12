@@ -504,3 +504,175 @@ class TestJobsVersionW23:
         job_repo.enrich_job(conn, rid, title="AI Engineer")
         row2 = job_repo.get_job(conn, rid)
         assert srv._best_ats_for_row(conn, row2)[1] == 0
+
+
+class TestVersionedMigrationsW27:
+    """W2.7: MIGRATIONS registry — a DB at version N applies only steps
+    N+1..target; a raising step leaves user_version unchanged."""
+
+    def _db_at(self, version, monkeypatch):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(SCHEMA)
+        conn.execute(f"PRAGMA user_version = {version}")
+        conn.commit()
+        job_repo.upsert_stub(conn, job_id=42, job_url="http://x/42", title="T")
+        return conn
+
+    def test_db_at_v2_applies_only_v3_v4(self, monkeypatch):
+        from db import migrate as dbmigrate
+        applied = []
+        for v in (1, 2):
+            monkeypatch.setitem(dbmigrate.MIGRATIONS, v,
+                                lambda conn, _v=v: applied.append(_v))
+        conn = self._db_at(2, monkeypatch)
+        init_db(conn)
+        assert applied == []                      # v1/v2 must not re-run
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        assert conn.execute(
+            "SELECT scrape_status FROM jobs WHERE job_id=42").fetchone()[0] in ("", None)
+
+    def test_raising_step_leaves_version_unchanged(self, monkeypatch):
+        from db import migrate as dbmigrate
+        def boom(conn):
+            raise RuntimeError("v4 step exploded")
+        monkeypatch.setitem(dbmigrate.MIGRATIONS, 4, boom)
+        conn = self._db_at(3, monkeypatch)
+        with pytest.raises(RuntimeError, match="v4 step exploded"):
+            init_db(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+        # next boot retries: with the fixed step it completes
+        monkeypatch.setitem(dbmigrate.MIGRATIONS, 4, lambda conn: None)
+        init_db(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+    def test_new_db_runs_all_steps_in_order(self, monkeypatch):
+        from db import migrate as dbmigrate
+        applied = []
+        for v in sorted(dbmigrate.MIGRATIONS):
+            monkeypatch.setitem(dbmigrate.MIGRATIONS, v,
+                                lambda conn, _v=v: applied.append(_v))
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(SCHEMA)
+        init_db(conn)
+        assert applied == sorted(dbmigrate.MIGRATIONS)
+
+    def test_dry_run_lists_steps_without_applying(self, tmp_path, monkeypatch, capsys):
+        from db import migrate as dbmigrate
+        import db.connection as dbconn
+        monkeypatch.setattr(dbconn, "DB_PATH", str(tmp_path / "dry.db"))
+        conn = dbconn.get_conn()
+        conn.executescript(SCHEMA)
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+        conn.close()
+
+        dbmigrate.main(["--dry-run", "--db", str(tmp_path / "dry.db")])
+        out = capsys.readouterr().out
+        assert "would apply v3" in out
+        assert "would apply v4" in out
+        assert "would apply v1" not in out and "would apply v2" not in out
+
+        # …and it really didn't apply anything
+        conn = dbconn.get_conn()
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+        conn.close()
+
+    def test_cli_apply_migrates_file(self, tmp_path, monkeypatch, capsys):
+        from db import migrate as dbmigrate
+        import db.connection as dbconn
+        monkeypatch.setattr(dbconn, "DB_PATH", str(tmp_path / "wet.db"))
+        conn = dbconn.get_conn()
+        conn.executescript(SCHEMA)
+        conn.execute("PRAGMA user_version = 2")
+        conn.commit()
+        conn.close()
+
+        dbmigrate.main(["--db", str(tmp_path / "wet.db")])
+        out = capsys.readouterr().out
+        assert "migrated to v" in out
+        conn = dbconn.get_conn()
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        conn.close()
+
+    def test_dry_run_missing_db_file(self, tmp_path, monkeypatch, capsys):
+        from db import migrate as dbmigrate
+        dbmigrate.main(["--dry-run", "--db", str(tmp_path / "nope.db")])
+        out = capsys.readouterr().out
+        assert "no such DB file" in out
+        assert not (tmp_path / "nope.db").exists()  # dry-run must not create it
+
+    def test_legacy_old_column_names_get_renamed(self):
+        """A pre-2.0 table (job_link/job_title/… only) migrates its data into
+        the new columns on the version bump (stale-column-list regression)."""
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript("""
+            CREATE TABLE jobs (
+                id INTEGER PRIMARY KEY, job_link TEXT, job_title TEXT,
+                search_tag TEXT, tags_found TEXT, status TEXT, salary TEXT,
+                description TEXT, company TEXT, employer_id INTEGER
+            );
+            INSERT INTO jobs (job_link, job_title, status, salary, employer_id)
+            VALUES ('https://www.onlinejobs.ph/jobseekers/job/abc-123',
+                    'PHP Dev', 'Open', 'PHP 30k', 5);
+            PRAGMA user_version = 0;
+        """)
+        init_db(conn)
+        row = conn.execute("SELECT job_url, title, job_id, status FROM jobs").fetchone()
+        assert row["job_url"] == "https://www.onlinejobs.ph/jobseekers/job/abc-123"
+        assert row["title"] == "PHP Dev"
+        assert row["job_id"] == 123  # populated from the migrated job_url
+        assert row["status"] == "New"  # 'Open' normalised in v1
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+    def test_real_steps_run_twice(self):
+        """Brief B: every migration must run twice safely. A legacy DB with
+        data (renames, salary backfill, reposts, scrape_status repair) is
+        migrated v0→4, then all four real steps run again — the resulting
+        data must be byte-identical."""
+        from db import migrate as dbmigrate
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript("""
+            CREATE TABLE jobs (
+                id INTEGER PRIMARY KEY, job_link TEXT, job_title TEXT,
+                search_tag TEXT, tags_found TEXT, status TEXT, salary TEXT,
+                description TEXT, company TEXT, employer_id INTEGER,
+                job_url TEXT, title TEXT, search_keyword TEXT, skills TEXT,
+                scrape_status TEXT DEFAULT '', scrape_reason TEXT DEFAULT '',
+                last_checked TEXT, repost_of INTEGER, salary_min REAL, salary_max REAL
+            );
+            INSERT INTO jobs (job_link, job_title, status, salary, employer_id)
+            VALUES
+              ('https://www.onlinejobs.ph/jobseekers/job/aaa-101', 'PHP Dev', 'Open',  '40000-50000php', 5),
+              ('https://www.onlinejobs.ph/jobseekers/job/bbb-102', 'PHP Dev', 'Closed', 'US$800/mo',      5),
+              ('https://www.onlinejobs.ph/jobseekers/job/ccc-103', 'QA Engineer', 'Open', 'TBD',         6);
+            PRAGMA user_version = 0;
+        """)
+        init_db(conn)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+
+        def snapshot():
+            return [
+                tuple(r) for r in conn.execute(
+                    "SELECT id, job_id, job_url, title, status, skills, scrape_status, "
+                    "repost_of, salary_min, salary_max FROM jobs ORDER BY id"
+                ).fetchall()
+            ]
+
+        first = snapshot()
+        # sanity: the migration actually did things worth repeating
+        assert first[0][3] == "PHP Dev" and first[0][4] == "New"             # rename + normalise
+        assert first[0][8] == 40000.0 and first[0][9] == 50000.0             # salary backfill
+        assert first[1][7] == first[0][0] and first[0][7] is None            # repost -> original row id
+        assert first[2][8] is None                                           # 'TBD' -> no numbers, no backfill
+        assert all(s in ("", None) for s in [r[6] for r in first])           # never-checked ⇒ unknown
+
+        # re-run every real step over the fully-migrated table
+        conn.execute("PRAGMA user_version = 0")
+        conn.commit()
+        dbmigrate.run(conn, SCHEMA_VERSION)
+        assert snapshot() == first           # no drift, no error
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
