@@ -31,10 +31,12 @@ def sse(event: str, data, run_id: str | None = None) -> str:
     return payload + "\n"
 
 
-def hardened(gen, name: str):
+def hardened(gen, name: str, run_id: str | None = None):
     """Wrap a streaming generator into a resilient "run" (W2.2).
 
-    - announces `run_started {run, run_id}` as the first event
+    - announces `run_started {run, run_id}` as the first event; callers may
+      pass their own run_id (W2.8: to tie a per-run stop token to it) or one
+      is minted
     - tags every inner event with the run id (events already carrying an
       `id:` line pass through unchanged)
     - if the inner generator raises, emits `error {detail}` then
@@ -42,16 +44,16 @@ def hardened(gen, name: str):
     """
 
     def wrapped():
-        run_id = uuid.uuid4().hex
+        rid = run_id if run_id is not None else uuid.uuid4().hex
         try:
-            yield sse("run_started", {"run": name, "run_id": run_id}, run_id)
+            yield sse("run_started", {"run": name, "run_id": rid}, rid)
             for chunk in gen:
                 if "id: " not in chunk:
-                    chunk = f"id: {run_id}\n{chunk}"
+                    chunk = f"id: {rid}\n{chunk}"
                 yield chunk
         except Exception as e:
-            log.exception("run '%s' (%s) failed: %s", name, run_id, e)
-            yield sse("error", {"detail": str(e), "run": name}, run_id)
-            yield sse("done", "failed", run_id)
+            log.exception("run '%s' (%s) failed: %s", name, rid, e)
+            yield sse("error", {"detail": str(e), "run": name}, rid)
+            yield sse("done", "failed", rid)
 
     return wrapped()

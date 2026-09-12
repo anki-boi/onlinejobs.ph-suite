@@ -14,6 +14,7 @@ const state = {
   total: 0,
   scraping: false,
   activeRun: null,        // 'harvest' | 'check' | null — drives button phase labels
+  activeRunId: null,      // W2.8: run_id from run_started — the stop button targets it
   // Excel-style column controls
   sort: '', order: 'desc',
   hasSalaryOnly: false,   // "With salary" toggle (toolbar + Salary ▼ share this one state)
@@ -394,6 +395,7 @@ async function streamSSE(url, body) {
 // current phase is visible at a glance in the activity feed.
 const PHASE_RE = /^(Harvest:|Harvest done|Enriching|No new jobs|No jobs|\[STOPPED\]|⛔)/;
 function handleSSE(ev, d) {
+  if (ev === 'run_started' && d && d.run_id) state.activeRunId = d.run_id;
   switch(ev) {
     case 'log': {
       const msg = typeof d==='string'?d:(d.message||'');
@@ -439,6 +441,7 @@ function handleSSE(ev, d) {
 function setScraping(on) {
   state.scraping = on;
   state.activeRun = null;
+  state.activeRunId = null;
   $('#btn-harvest').disabled = on;
   $('#btn-check').disabled = on;
   $('#btn-stop').disabled = !on;
@@ -659,7 +662,7 @@ function init() {
   // Harvest
   $('#btn-harvest').addEventListener('click', runPipeline);
   $('#btn-check').addEventListener('click', runCheck);
-  $('#btn-stop').addEventListener('click', ()=>{ fetch('/api/pipeline/stop',{method:'POST'}); log('Stop sent','log-error'); });
+  $('#btn-stop').addEventListener('click', ()=>{ fetch('/api/pipeline/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id: state.activeRunId||null})}); log('Stop sent','log-error'); });
 
   // Console
   $('#console-close').addEventListener('click', ()=>consoleEl.innerHTML='');
@@ -910,7 +913,7 @@ async function syncAutoRunUI() {
     const st = $('#auto-run-status');
     if (st) {
       let txt = s.last_run
-        ? `last run ${s.last_run}${s.last_error ? ` — ${s.last_error}` : ''}`
+        ? `last run ${s.last_run}${s.last_status === 'stopped' ? ' — stopped' : s.last_error ? ` — ${s.last_error}` : ''}`
         : 'never run yet';
       // W2.6: another Job Hunter instance is running the pipeline on this DB
       if (s.instance_lock) {

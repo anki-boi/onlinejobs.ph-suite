@@ -194,7 +194,7 @@ def harvest(
     yield PipelineEvent(
         "summary",
         f"Harvest done: {total_new} new / {total_seen} seen",
-        {"new": total_new, "seen": total_seen},
+        {"new": total_new, "seen": total_seen, "stopped": client.stopped},
     )
 
 
@@ -317,5 +317,6 @@ def enrich(
     yield PipelineEvent(
         "summary",
         f"Enrich complete: 🟢 {open_count} open, 🔴 {closed_count} closed, ⚠ {error_count} errors",
-        {"open": open_count, "closed": closed_count, "errors": error_count, "total": len(jobs)},
+        {"open": open_count, "closed": closed_count, "errors": error_count,
+         "total": len(jobs), "stopped": client.stopped},
     )

@@ -25,6 +25,10 @@ class SchedulerClient:
     stopped = False
     base_url = "http://x"
 
+    def set_stop(self, token):
+        # W2.8: mirror the real client — the run's token drives stopped.
+        self.stopped = token.stopped
+
     def get(self, url):
         if "/jobsearch/" in url or "/c/" in url:
             return FakeResp(SEARCH_HTML.replace("jobpost-cat-box", ""))

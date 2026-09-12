@@ -8,6 +8,7 @@ State lives in the app_settings table (survives restarts):
   auto_run_enabled            "1"/"0"       (default on — user chose every 4h)
   auto_run_interval_hours     "1".."24"     (default 4)
   last_run / last_error       for the UI
+  last_status                 "completed"/"stopped"/"failed" (W2.8)
   next_run                    epoch seconds; the tick fires when now >= it
 """
 
@@ -16,12 +17,14 @@ import logging
 import os
 import threading
 import time
+import uuid
 
 import db.connection as dbconn
 from app import events
 from app import pipeline_apply
 from db.repos import jobs as job_repo
 from db.repos import settings as settings_repo
+from scraper.client import StopToken
 from scraper.pipeline import enrich, harvest
 
 log = logging.getLogger(__name__)
@@ -31,6 +34,68 @@ DEFAULT_INTERVAL_HOURS = 4
 # Manual pipeline endpoints take this too, so an auto-run and a hand-pressed
 # Run never fire two scrapes at the site at once.
 pipeline_lock = threading.Lock()
+
+# W2.8: stop is per-run, not per-client. The OJClient is shared and
+# persistent (session reuse across runs), but each run registers its own
+# StopToken and the client is pointed at it only while that run holds the
+# pipeline lock — so a stop reaches exactly that run and can't leak into the
+# next one (the old single shared flag: stopping a manual run left the flag
+# set for the auto-run that followed).
+active_runs: dict[str, StopToken] = {}
+active_run_id: str | None = None
+
+
+def new_run_id() -> str:
+    return uuid.uuid4().hex
+
+
+def register_run(run_id: str, token: StopToken) -> None:
+    """Remember a run's stop token (idempotent; also called by begin_run)."""
+    active_runs[run_id] = token
+
+
+def begin_run(run_id: str, token: StopToken, client) -> None:
+    """Called when a run owns the pipeline lock: register the token, mark the
+    run active, and point the shared client at it."""
+    global active_run_id
+    register_run(run_id, token)
+    active_run_id = run_id
+    client.set_stop(token)
+
+
+def end_run(run_id: str) -> None:
+    """Run finished (complete/stopped/failed): drop its token."""
+    global active_run_id
+    active_runs.pop(run_id, None)
+    if active_run_id == run_id:
+        active_run_id = None
+
+
+def stop_run(run_id: str | None = None) -> bool:
+    """Flip the stop flag of one run. An explicit run_id targets exactly that
+    run (no fallback — a stale id must not kill a different run); None
+    targets the server's active run (backward-compatible stop button).
+    Returns True if a token was flipped."""
+    if run_id:
+        target = active_runs.get(run_id)
+    else:
+        target = active_runs.get(active_run_id) if active_run_id else None
+    if target is not None:
+        target.stop()
+        return True
+    return False
+
+
+def record_run_status(conn, stopped: bool = False, error: str | None = None) -> None:
+    """W2.8: persist a run's outcome. A stopped run is 'stopped' (with its
+    partial results) — never 'failed'. Only a raised error is 'failed'."""
+    if error:
+        settings_repo.set(conn, "last_error", error)
+        settings_repo.set(conn, "last_status", "failed")
+    else:
+        settings_repo.set(conn, "last_status", "stopped" if stopped else "completed")
+        if stopped:
+            settings_repo.set(conn, "last_error", "")
 
 
 def _defaults_conn():
@@ -70,6 +135,7 @@ def tick(client_factory=None) -> None:
             pass  # corrupt value → run anyway, the write below repairs it
     if not pipeline_lock.acquire(blocking=False):
         return  # a manual run is in progress — retry next tick
+    run_id = None
     try:
         # W2.6: cross-process guard — a second Job Hunter instance with the
         # same DB would otherwise fire a second scrape at the site.
@@ -91,13 +157,21 @@ def tick(client_factory=None) -> None:
         # W2.5: the live config (app/config.py) — enrich_workers /
         # enrich_interval_days in config.local.json are honored, no restart.
         cfg = dbconn.load_config()
-        summary = run_once(client_factory(), conn, events.publish, cfg)
-        events.publish("schedule_done", summary)
+        client = client_factory()
+        # W2.8: this run gets its own stop token; the shared client now
+        # references it, so a stop can't leak into the next run.
+        run_id = new_run_id()
+        begin_run(run_id, StopToken(), client)
+        summary = run_once(client, conn, events.publish, cfg)
+        record_run_status(conn, stopped=client.stopped)
+        events.publish("schedule_done", {**summary, "run_id": run_id})
     except Exception as exc:
         log.warning(f"auto-run failed: {exc}")
-        settings_repo.set(conn, "last_error", str(exc))
+        record_run_status(conn, error=str(exc))
         events.publish("alert", {"type": "error", "message": f"auto-run failed: {exc}"})
     finally:
+        if run_id is not None:
+            end_run(run_id)
         settings_repo.release_instance_lock(conn)
         pipeline_lock.release()
 
@@ -199,6 +273,9 @@ def run_once(client, conn, publish, cfg: dict | None = None) -> dict:
             "message": f"{due} follow-up(s) due",
         })
 
+    # W2.8: the run's status is recorded by the caller via record_run_status
+    # (a stop is 'stopped', never 'failed'; only a raised error fails).
+
     return {
         "inserted": inserted,
         "enriched": enriched,
@@ -206,6 +283,7 @@ def run_once(client, conn, publish, cfg: dict | None = None) -> dict:
         "errors": errors + len(structure_errors),
         "auto_hidden": auto_hidden,
         "new_titles": new_titles[:10],
+        "stopped": client.stopped,
     }
 
 

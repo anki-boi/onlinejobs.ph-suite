@@ -21,6 +21,29 @@ class ScrapeStopped(Exception):
     """Raised when the user requests a stop."""
 
 
+class StopToken:
+    """One stop flag per pipeline run (W2.8).
+
+    The HTTP client is shared and persistent (session reuse), but stopping
+    must be per run: two overlapping runs (auto + manual) stop independently.
+    A run creates a token, hands it to the client via set_stop(), and its
+    Stop button flips exactly that token.
+    """
+
+    def __init__(self):
+        self._event = threading.Event()
+
+    def stop(self):
+        self._event.set()
+
+    def reset(self):
+        self._event.clear()
+
+    @property
+    def stopped(self) -> bool:
+        return self._event.is_set()
+
+
 class RateLimitExhausted(Exception):
     """Raised after max retries on 429."""
 
@@ -47,7 +70,7 @@ class OJClient:
             "User-Agent": user_agent,
             "Accept-Language": "en-US,en;q=0.9",
         })
-        self._stop = False
+        self._stop_token = StopToken()  # W2.8: per-run, swappable via set_stop()
         self._lock = threading.Lock()
         self._last_request = 0.0
 
@@ -74,7 +97,7 @@ class OJClient:
         last_exc: Exception | None = None
 
         for attempt in range(self.max_retries + 1):
-            if self._stop:
+            if self._stop_token.stopped:
                 raise ScrapeStopped("User requested stop")
 
             self._throttle()
@@ -135,12 +158,18 @@ class OJClient:
         except Exception:
             return None
 
+    # ── Control ───────────────────────────────────────────────────────
+
+    def set_stop(self, token: StopToken):
+        """Attach this run's stop token (the session itself is kept)."""
+        self._stop_token = token
+
     def stop(self):
-        self._stop = True
+        self._stop_token.stop()
 
     def reset(self):
-        self._stop = False
+        self._stop_token.reset()
 
     @property
     def stopped(self) -> bool:
-        return self._stop
+        return self._stop_token.stopped

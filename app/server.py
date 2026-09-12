@@ -25,6 +25,7 @@ from app.schemas import (
     ScrapeScope,
     ScheduleUpdate,
     StatusUpdate,
+    StopRequest,
     TailorRequest,
 )
 from app.sse import hardened, sse
@@ -43,7 +44,7 @@ from resumes import render as resume_render
 from resumes import schema as resume_schema
 from resumes.schema import validate
 from resumes.tailor import LLMClient, job_brief, tailor
-from scraper.client import OJClient
+from scraper.client import OJClient, StopToken
 from scraper.pipeline import enrich, harvest
 from scraper.skills import fetch_skills, skills_to_db_rows
 
@@ -318,6 +319,7 @@ def get_schedule():
                               or scheduler.DEFAULT_INTERVAL_HOURS),
         "last_run": settings_repo.get(conn, "last_run", ""),
         "last_error": settings_repo.get(conn, "last_error", ""),
+        "last_status": settings_repo.get(conn, "last_status", ""),
         "next_run": settings_repo.get(conn, "next_run", ""),
         "running": scheduler.is_running(),
         # W2.6: cross-process lock holder (for /health-style status + the UI)
@@ -609,7 +611,12 @@ def run_pipeline(body: PipelineRequest):
     """Full pipeline: harvest → enrich. Streams SSE."""
     conn = get_db()
     client = get_client()
-    client.reset()
+
+    # W2.8: this run's own stop token (the shared client is persistent, but
+    # stopping is per run). The client is pointed at it only while this run
+    # owns the pipeline lock, inside generate().
+    run_id = scheduler.new_run_id()
+    token = StopToken()
 
     keyword = (body.keyword or "").strip()
     categories = body.categories or []
@@ -669,6 +676,9 @@ def run_pipeline(body: PipelineRequest):
             yield sse("done", "busy")
             scheduler.pipeline_lock.release()
             return
+        # W2.8: this run owns the pipeline now — point the shared client at
+        # this run's token, so Stop reaches exactly this run.
+        scheduler.begin_run(run_id, token, client)
         try:
             new_job_ids: list[int] = []
             for event in harvest(
@@ -705,7 +715,8 @@ def run_pipeline(body: PipelineRequest):
                 elif event.type == "summary":
                     yield sse("harvest_summary", event.data)
 
-            if client.stopped:
+            if token.stopped:
+                scheduler.record_run_status(conn, stopped=True)
                 yield sse("done", "stopped")
                 return
 
@@ -736,12 +747,18 @@ def run_pipeline(body: PipelineRequest):
                     elif event.type == "summary":
                         yield sse("enrich_summary", event.data)
 
-            yield sse("done", "complete")
+            stopped = token.stopped
+            scheduler.record_run_status(conn, stopped=stopped)
+            yield sse("done", "stopped" if stopped else "complete")
+        except Exception as exc:
+            scheduler.record_run_status(conn, error=str(exc))
+            raise
         finally:
             settings_repo.release_instance_lock(conn)
+            scheduler.end_run(run_id)
             scheduler.pipeline_lock.release()
 
-    return StreamingResponse(hardened(generate(), "pipeline/run"), media_type="text/event-stream")
+    return StreamingResponse(hardened(generate(), "pipeline/run", run_id), media_type="text/event-stream")
 
 
 @app.post("/api/pipeline/check")
@@ -749,7 +766,10 @@ def run_check(body: CheckRequest):
     """Re-check existing jobs."""
     conn = get_db()
     client = get_client()
-    client.reset()
+
+    # W2.8: per-run stop token (same lifecycle as /api/pipeline/run).
+    run_id = scheduler.new_run_id()
+    token = StopToken()
 
     if body.recheck_all:
         rows = conn.execute(
@@ -788,6 +808,9 @@ def run_check(body: CheckRequest):
             yield sse("done", "busy")
             scheduler.pipeline_lock.release()
             return
+        # W2.8: this run owns the pipeline now — point the shared client at
+        # this run's token, so Stop reaches exactly this run.
+        scheduler.begin_run(run_id, token, client)
         try:
             if not jobs_to_check:
                 yield sse("log", "No jobs need checking")
@@ -807,19 +830,28 @@ def run_check(body: CheckRequest):
                     yield sse("enrich_done", {k: v for k, v in d.items() if k != "description"})
                 elif event.type == "summary":
                     yield sse("enrich_summary", event.data)
-            yield sse("done", "complete")
+            stopped = token.stopped
+            scheduler.record_run_status(conn, stopped=stopped)
+            yield sse("done", "stopped" if stopped else "complete")
+        except Exception as exc:
+            scheduler.record_run_status(conn, error=str(exc))
+            raise
         finally:
             settings_repo.release_instance_lock(conn)
+            scheduler.end_run(run_id)
             scheduler.pipeline_lock.release()
 
-    return StreamingResponse(hardened(generate(), "pipeline/check"), media_type="text/event-stream")
+    return StreamingResponse(hardened(generate(), "pipeline/check", run_id), media_type="text/event-stream")
 
 
 @app.post("/api/pipeline/stop")
-def stop_pipeline():
-    if _client:
-        _client.stop()
-    return {"ok": True, "message": "Stop signal sent"}
+def stop_pipeline(body: StopRequest = None):
+    """W2.8: stop one run. With a run_id, only that run's stop flag is
+    flipped; without, the server's active run (backward-compatible)."""
+    run_id = body.run_id if body is not None else None
+    stopped = scheduler.stop_run(run_id)
+    return {"ok": True,
+            "message": "Stop signal sent" if stopped else "No active run to stop"}
 
 
 # ── Keyword filters (post-enrichment) ───────────────────────────────────────

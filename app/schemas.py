@@ -28,6 +28,11 @@ class ScrapeScope(BaseModel):
     skills: list[str] = []
 
 
+class StopRequest(BaseModel):
+    """W2.8: optional — target a specific run; omitted = the active run."""
+    run_id: str | None = None
+
+
 # ── Auto-run ────────────────────────────────────────────────────────────────
 
 class ScheduleUpdate(BaseModel):
