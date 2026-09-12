@@ -908,9 +908,18 @@ async function syncAutoRunUI() {
     $('#auto-run-enabled').checked = s.enabled;
     $('#auto-run-interval').value = String(s.interval_hours || 4);
     const st = $('#auto-run-status');
-    if (st) st.textContent = s.last_run
-      ? `last run ${s.last_run}${s.last_error ? ` — ${s.last_error}` : ''}`
-      : 'never run yet';
+    if (st) {
+      let txt = s.last_run
+        ? `last run ${s.last_run}${s.last_error ? ` — ${s.last_error}` : ''}`
+        : 'never run yet';
+      // W2.6: another Job Hunter instance is running the pipeline on this DB
+      if (s.instance_lock) {
+        txt += s.instance_lock.stale
+          ? ` · pipeline lock left over from pid ${s.instance_lock.pid} (auto-released)`
+          : ` · pipeline running in another instance (pid ${s.instance_lock.pid})`;
+      }
+      st.textContent = txt;
+    }
   } catch (_) { /* server not up yet */ }
 }
 

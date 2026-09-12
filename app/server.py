@@ -6,6 +6,7 @@ Run:  uvicorn app.server:app --reload
 
 import json
 import logging
+import os
 import re
 import sqlite3
 from pathlib import Path
@@ -126,6 +127,18 @@ def get_client() -> OJClient:
             user_agent=_cfg.get("user_agent") or _DEFAULT_UA,
         )
     return _client
+
+
+def _claim_run_or_busy(conn) -> tuple[bool, str]:
+    """W2.6: claim the cross-process pipeline lock for this run.
+    (ok, message) — False with a user-facing message when another live
+    instance holds it."""
+    holder = settings_repo.instance_lock_holder(conn)
+    if holder and not holder["stale"] and holder["pid"] != os.getpid():
+        return False, f"another instance is running the pipeline (pid {holder['pid']})"
+    if settings_repo.acquire_instance_lock(conn):
+        return True, ""
+    return False, "another instance just claimed the pipeline"
 
 # (W2.1) per-request connections come from app.deps.get_db — one shared
 # connection per (thread, db path), schema ensured once per process per path,
@@ -307,6 +320,8 @@ def get_schedule():
         "last_error": settings_repo.get(conn, "last_error", ""),
         "next_run": settings_repo.get(conn, "next_run", ""),
         "running": scheduler.is_running(),
+        # W2.6: cross-process lock holder (for /health-style status + the UI)
+        "instance_lock": settings_repo.instance_lock_holder(conn),
     }
 
 
@@ -640,6 +655,20 @@ def run_pipeline(body: PipelineRequest):
             yield sse("error", "Another run is in progress (auto-run or another tab) — try again shortly")
             yield sse("done", "busy")
             return
+        # W2.6: cross-process guard — a second Job Hunter instance sharing this
+        # DB would otherwise fire a second scrape at the site.
+        try:
+            ok, msg = _claim_run_or_busy(conn)
+        except Exception as exc:  # e.g. a stale implicit transaction
+            scheduler.pipeline_lock.release()
+            yield sse("error", f"could not claim the pipeline lock: {exc}")
+            yield sse("done", "busy")
+            return
+        if not ok:
+            yield sse("error", f"{msg} — try again shortly")
+            yield sse("done", "busy")
+            scheduler.pipeline_lock.release()
+            return
         try:
             new_job_ids: list[int] = []
             for event in harvest(
@@ -650,6 +679,7 @@ def run_pipeline(body: PipelineRequest):
                 posted_since=posted_since,
                 existing_ids=existing_ids,
             ):
+                settings_repo.heartbeat_instance_lock(conn)
                 if event.type == "log":
                     yield sse("log", event.message)
                 elif event.type == "error":
@@ -693,6 +723,7 @@ def run_pipeline(body: PipelineRequest):
             if jobs_to_enrich:
                 workers = _cfg.get("enrich_workers", 3)
                 for event in enrich(client, jobs_to_enrich, workers=workers):
+                    settings_repo.heartbeat_instance_lock(conn)
                     if event.type == "log":
                         yield sse("log", event.message)
                     elif event.type == "error":
@@ -707,6 +738,7 @@ def run_pipeline(body: PipelineRequest):
 
             yield sse("done", "complete")
         finally:
+            settings_repo.release_instance_lock(conn)
             scheduler.pipeline_lock.release()
 
     return StreamingResponse(hardened(generate(), "pipeline/run"), media_type="text/event-stream")
@@ -743,6 +775,19 @@ def run_check(body: CheckRequest):
             yield sse("error", "Another run is in progress (auto-run or another tab) — try again shortly")
             yield sse("done", "busy")
             return
+        # W2.6: cross-process guard (same as /api/pipeline/run)
+        try:
+            ok, msg = _claim_run_or_busy(conn)
+        except Exception as exc:
+            scheduler.pipeline_lock.release()
+            yield sse("error", f"could not claim the pipeline lock: {exc}")
+            yield sse("done", "busy")
+            return
+        if not ok:
+            yield sse("error", f"{msg} — try again shortly")
+            yield sse("done", "busy")
+            scheduler.pipeline_lock.release()
+            return
         try:
             if not jobs_to_check:
                 yield sse("log", "No jobs need checking")
@@ -751,6 +796,7 @@ def run_check(body: CheckRequest):
 
             workers = body.workers or _cfg.get("enrich_workers", 3)
             for event in enrich(client, jobs_to_check, workers=workers):
+                settings_repo.heartbeat_instance_lock(conn)
                 if event.type == "log":
                     yield sse("log", event.message)
                 elif event.type == "error":
@@ -763,6 +809,7 @@ def run_check(body: CheckRequest):
                     yield sse("enrich_summary", event.data)
             yield sse("done", "complete")
         finally:
+            settings_repo.release_instance_lock(conn)
             scheduler.pipeline_lock.release()
 
     return StreamingResponse(hardened(generate(), "pipeline/check"), media_type="text/event-stream")

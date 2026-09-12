@@ -13,6 +13,7 @@ State lives in the app_settings table (survives restarts):
 
 import json
 import logging
+import os
 import threading
 import time
 
@@ -70,6 +71,15 @@ def tick(client_factory=None) -> None:
     if not pipeline_lock.acquire(blocking=False):
         return  # a manual run is in progress — retry next tick
     try:
+        # W2.6: cross-process guard — a second Job Hunter instance with the
+        # same DB would otherwise fire a second scrape at the site.
+        holder = settings_repo.instance_lock_holder(conn)
+        if holder and not holder["stale"] and holder["pid"] != os.getpid():
+            log.info(f"another instance is running the pipeline (pid {holder['pid']}) — "
+                     "skipping auto-run")
+            return
+        if not settings_repo.acquire_instance_lock(conn):
+            return  # lost the race to another process — retry next tick
         hours = int(settings_repo.get(conn, "auto_run_interval_hours", str(DEFAULT_INTERVAL_HOURS))
                     or DEFAULT_INTERVAL_HOURS)
         settings_repo.set(conn, "last_run", time.strftime("%Y-%m-%d %H:%M:%S"))
@@ -88,6 +98,7 @@ def tick(client_factory=None) -> None:
         settings_repo.set(conn, "last_error", str(exc))
         events.publish("alert", {"type": "error", "message": f"auto-run failed: {exc}"})
     finally:
+        settings_repo.release_instance_lock(conn)
         pipeline_lock.release()
 
 
@@ -113,6 +124,7 @@ def run_once(client, conn, publish, cfg: dict | None = None) -> dict:
 
     for event in harvest(client, existing_ids=existing, keyword=scope_kw,
                          categories=scope_cats or None, skill_ids=skill_ids or None):
+        settings_repo.heartbeat_instance_lock(conn)  # W2.6: keep the lock fresh per batch
         if event.type == "harvest_result":
             n, new_items = pipeline_apply.apply_harvest(conn, event)
             inserted += n
@@ -139,6 +151,7 @@ def run_once(client, conn, publish, cfg: dict | None = None) -> dict:
 
     enriched = closed = errors = 0
     for event in enrich(client, jobs_to_enrich, workers=int(cfg.get("enrich_workers", 3) or 3)):
+        settings_repo.heartbeat_instance_lock(conn)  # W2.6: keep the lock fresh per batch
         if event.type == "enrich_result":
             d = event.data
             if "error" in d:
