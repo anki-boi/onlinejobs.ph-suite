@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+      - name: Ruff
+        run: ruff check .
+      - name: Pytest
+        run: python -m pytest tests/ -q
+
+  install-smoke:
+    # A fresh venv, exactly what install.bat installs, must import and boot
+    # from a clean HOME (the W1.1 fresh-clone scenario, minus the .bat layer).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Fresh venv install
+        run: |
+          python -m venv .venv-ci
+          .venv-ci/bin/python -m pip install --upgrade pip
+          .venv-ci/bin/python -m pip install -r requirements.txt
+          .venv-ci/bin/python -c "import app.server, scraper.pipeline, resumes.render; print('import ok')"
+      - name: Fresh boot from clean HOME
+        run: |
+          mkdir -p /tmp/v
+          HOME=/tmp/v JOBS_DB_PATH=/tmp/v/jobs.db .venv-ci/bin/python main.py --skip-skills --port 8391 &
+          SERVER_PID=$!
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:8391/api/stats >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:8391/ -o /dev/null
+          curl -sf http://127.0.0.1:8391/api/stats
+          kill $SERVER_PID
