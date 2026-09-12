@@ -9,6 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 import pymupdf
+from resumes import digest as resume_digest, yamlcv as resume_yamlcv
 
 from fastapi.testclient import TestClient
 from app.server import app
@@ -65,15 +66,15 @@ def _fake_build(llm, corpus_text, identity, job_text, out_dir, max_rounds=4):
 def test_build_success_lists_and_serves(client, monkeypatch, tmp_path):
     _seed_job(client)
     from app import server as srv
-    monkeypatch.setattr(srv.resume_yamlcv, "available", lambda: True)
-    monkeypatch.setattr(srv.resume_digest, "digest",
+    monkeypatch.setattr(resume_yamlcv, "available", lambda: True)
+    monkeypatch.setattr(resume_digest, "digest",
                         lambda s, **kw: {"sources": [{"file": "x", "chars": 100, "text": "t"}],
                                          "bullets": ["b"], "terms": ["sql"],
                                          "images": [], "chars": 500})
-    monkeypatch.setattr(srv.resume_digest, "corpus_text", lambda c, **kw: "CORPUS")
+    monkeypatch.setattr(resume_digest, "corpus_text", lambda c, **kw: "CORPUS")
     monkeypatch.setattr(srv.LLMClient, "from_config",
                         classmethod(lambda cls, cfg: object()))
-    monkeypatch.setattr(srv.resume_yamlcv, "build_one_pager", _fake_build)
+    monkeypatch.setattr(resume_yamlcv, "build_one_pager", _fake_build)
 
     r = client.post("/api/resume/build", json={"job_id": 1})
     assert r.status_code == 200, r.text
@@ -94,7 +95,7 @@ def test_build_success_lists_and_serves(client, monkeypatch, tmp_path):
 def test_build_503_without_toolchain(client, monkeypatch):
     _seed_job(client)
     from app import server as srv
-    monkeypatch.setattr(srv.resume_yamlcv, "available", lambda: False)
+    monkeypatch.setattr(resume_yamlcv, "available", lambda: False)
     r = client.post("/api/resume/build", json={"job_id": 1})
     assert r.status_code == 503 and "rendercv" in r.json()["detail"]
 
@@ -102,19 +103,19 @@ def test_build_503_without_toolchain(client, monkeypatch):
 def test_build_422_when_loop_fails(client, monkeypatch):
     _seed_job(client)
     from app import server as srv
-    monkeypatch.setattr(srv.resume_yamlcv, "available", lambda: True)
-    monkeypatch.setattr(srv.resume_digest, "digest",
+    monkeypatch.setattr(resume_yamlcv, "available", lambda: True)
+    monkeypatch.setattr(resume_digest, "digest",
                         lambda s, **kw: {"sources": [{"file": "x", "chars": 100, "text": "t"}],
                                          "bullets": ["b"], "terms": ["sql"],
                                          "images": [], "chars": 500})
-    monkeypatch.setattr(srv.resume_digest, "corpus_text", lambda c, **kw: "C")
+    monkeypatch.setattr(resume_digest, "corpus_text", lambda c, **kw: "C")
     monkeypatch.setattr(srv.LLMClient, "from_config",
                         classmethod(lambda cls, cfg: object()))
 
     def fail(llm, corpus, identity, job, out_dir, max_rounds=4):
         return {"ok": False, "pages": 2, "rounds": 4, "yaml": "y",
                 "pdf": None, "history": [], "error": "still over one page after max rounds"}
-    monkeypatch.setattr(srv.resume_yamlcv, "build_one_pager", fail)
+    monkeypatch.setattr(resume_yamlcv, "build_one_pager", fail)
     r = client.post("/api/resume/build", json={"job_id": 1})
     assert r.status_code == 422 and "one page" in r.json()["detail"]
 
@@ -126,5 +127,5 @@ def test_built_list_empty_and_name_traversal_blocked(client):
 
 def test_yamlcv_status_endpoint(client, monkeypatch):
     from app import server as srv
-    monkeypatch.setattr(srv.resume_yamlcv, "available", lambda: True)
+    monkeypatch.setattr(resume_yamlcv, "available", lambda: True)
     assert client.get("/api/resume/yamlcv-status").json() == {"available": True}

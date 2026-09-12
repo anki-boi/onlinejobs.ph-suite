@@ -182,6 +182,7 @@ of INFO+ messages streams to stderr when running interactively.
 ## Development
 
 ```bash
+pip install -r requirements-dev.txt   # pytest + ruff (test/lint gate)
 python -m pytest tests/ -q      # full suite, no network
 JOBS_DB_PATH=/tmp/sandbox.db python main.py --port 8372   # run against a DB copy
 ```

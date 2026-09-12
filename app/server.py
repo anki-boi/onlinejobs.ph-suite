@@ -35,10 +35,10 @@ from db.repos import jobs as job_repo
 from db.repos import settings as settings_repo
 from db.repos import skills as skill_repo
 from resumes import ats as resume_ats_mod
-from resumes import digest as resume_digest
+# resumes.digest / resumes.yamlcv import pymupdf — lazy-imported inside the
+# routes that need them (W1.1) so `import app.server` works without it.
 from resumes import render as resume_render
 from resumes import schema as resume_schema
-from resumes import yamlcv as resume_yamlcv
 from resumes.schema import load_master, save_master, validate
 from resumes.tailor import LLMClient, job_brief, tailor
 from scraper.client import OJClient
@@ -433,6 +433,10 @@ def resume_export(job_id: int, fmt: str = "docx", tailored: int = 0, profile: st
 @app.get("/api/resume/yamlcv-status")
 def yamlcv_status():
     """Whether the rendercv toolchain is installed (gates the UI button)."""
+    try:
+        from resumes import yamlcv as resume_yamlcv
+    except ImportError:
+        return {"available": False}
     return {"available": resume_yamlcv.available()}
 
 
@@ -467,6 +471,11 @@ def built_file(name: str):
 def resume_build(body: TailorRequest):
     """Digest resume sources + LLM draft + render-loop until exactly 1 page.
     503 if no LLM or no rendercv toolchain; 422 if the loop can't fit a page."""
+    try:
+        from resumes import digest as resume_digest
+        from resumes import yamlcv as resume_yamlcv
+    except ImportError as e:
+        raise HTTPException(503, f"{e.name} is not installed - pip install -r requirements.txt")
     if not resume_yamlcv.available():
         raise HTTPException(503, "rendercv toolchain missing - run install.bat (needs Python 3.12+)")
     llm = LLMClient.from_config(_cfg)
