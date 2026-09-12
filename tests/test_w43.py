@@ -32,7 +32,7 @@ def _fake_scorer(masters, job):
 
 def test_v6_migration_idempotent(tmp_path, monkeypatch):
     conn = _fresh(tmp_path, monkeypatch)
-    assert dbconn.SCHEMA_VERSION == 6
+    assert dbconn.SCHEMA_VERSION == 7
     dbmigrate.MIGRATIONS[6](conn)
     dbmigrate.MIGRATIONS[6](conn)  # runs twice safely
     tables = {r[0] for r in conn.execute(

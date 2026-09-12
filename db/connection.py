@@ -19,7 +19,7 @@ import db.migrate as dbmigrate  # versioned migration registry (W2.7)
 # Bump when the migration in db/migrate.py changes. A DB file at a lower
 # version runs each unapplied step exactly once, on the next init_db(); a
 # fresh file runs all steps as no-ops and lands at this version.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -93,17 +93,28 @@ TABLES = """
     """
 
 # W2.7: indexes are created only *after* migrations — a legacy jobs table may
-# not have job_id yet when init_db() first sees it.
-INDEXES = """
-        CREATE INDEX IF NOT EXISTS idx_jobs_status       ON jobs(status);
-        CREATE INDEX IF NOT EXISTS idx_jobs_job_id       ON jobs(job_id);
-        CREATE INDEX IF NOT EXISTS idx_jobs_scrape_status ON jobs(scrape_status);
-        CREATE INDEX IF NOT EXISTS idx_jobs_last_checked ON jobs(last_checked);
-        CREATE INDEX IF NOT EXISTS idx_jobs_salary_monthly ON jobs(salary_monthly_min);
-        CREATE INDEX IF NOT EXISTS idx_jobs_norm_title_employer ON jobs(norm_title, employer_id);
-        CREATE INDEX IF NOT EXISTS idx_jobs_deleted_at ON jobs(deleted_at);
-        CREATE INDEX IF NOT EXISTS idx_history_job_id    ON job_history(job_id);
-        """
+# not have job_id yet when init_db() first sees it. Each def lists the table
+# and columns it needs; _create_indexes() only creates the ones whose columns
+# exist (fresh DBs via SCHEMA have them all).
+_INDEX_DEFS = [
+    ("idx_jobs_status", "jobs", ("status",)),
+    ("idx_jobs_job_id", "jobs", ("job_id",)),
+    ("idx_jobs_scrape_status", "jobs", ("scrape_status",)),
+    ("idx_jobs_last_checked", "jobs", ("last_checked",)),
+    ("idx_jobs_salary_monthly", "jobs", ("salary_monthly_min",)),
+    ("idx_jobs_norm_title_employer", "jobs", ("norm_title", "employer_id")),
+    ("idx_jobs_deleted_at", "jobs", ("deleted_at",)),
+    ("idx_jobs_date_found", "jobs", ("date_found", "id")),
+    ("idx_jobs_status_datefound", "jobs", ("status", "date_found", "id")),
+    ("idx_jobs_scrape_status_datefound", "jobs", ("scrape_status", "date_found", "id")),
+    ("idx_jobs_salary_monthly_max", "jobs", ("salary_monthly_max",)),
+    ("idx_history_job_id", "job_history", ("job_id",)),
+]
+
+INDEXES = "\n".join(
+    f"CREATE INDEX IF NOT EXISTS {name} ON {table}({', '.join(cols)});"
+    for name, table, cols in _INDEX_DEFS
+) + "\n"
 
 SCHEMA = TABLES + "\n" + INDEXES
 
@@ -190,4 +201,16 @@ def _create_tables(conn: sqlite3.Connection) -> None:
 
 
 def _create_indexes(conn: sqlite3.Connection) -> None:
-    conn.executescript(INDEXES)
+    # Only create indexes whose columns/tables exist yet — a legacy DB may be
+    # here before the migration that adds them has run (W2.7).
+    job_cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
+    history = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='job_history'"
+    ).fetchone()
+    stmts = []
+    for name, table, cols in _INDEX_DEFS:
+        have = job_cols if table == "jobs" else ({"job_id"} if history else set())
+        if all(c in have for c in cols):
+            stmts.append(f"CREATE INDEX IF NOT EXISTS {name} ON {table}({', '.join(cols)});")
+    if stmts:
+        conn.executescript("\n".join(stmts))
