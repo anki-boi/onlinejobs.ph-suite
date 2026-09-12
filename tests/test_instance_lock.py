@@ -43,12 +43,8 @@ def dead_pid():
     p = subprocess.Popen([sys.executable, "-c", "import time"],
                          stdout=subprocess.DEVNULL)
     p.wait()
-    if os.name == "nt":  # close the parent-held handle so the object goes away
-        import ctypes
-        h = getattr(p, "_handle", None)
-        if h:
-            ctypes.windll.kernel32.CloseHandle(h)
-            p._handle = None  # stop the wrapper's __del__ double-closing (GC warning)
+    # p's parent-side handle is closed by its __del__ (single close — no GC
+    # warning); the dead pid then reports a real exit code, i.e. 'dead'.
     time.sleep(0.2)
     return p.pid
 
