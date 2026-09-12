@@ -4,9 +4,7 @@ last/next run timestamps, last error).
 """
 
 import sqlite3
-from pathlib import Path
 
-import db.connection as dbconn
 
 BACKUP_RETENTION_KEY = "backup_retention_days"
 DEFAULT_BACKUP_RETENTION_DAYS = 7

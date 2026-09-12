@@ -39,7 +39,7 @@ from resumes import ats as resume_ats_mod
 # routes that need them (W1.1) so `import app.server` works without it.
 from resumes import render as resume_render
 from resumes import schema as resume_schema
-from resumes.schema import load_master, save_master, validate
+from resumes.schema import validate
 from resumes.tailor import LLMClient, job_brief, tailor
 from scraper.client import OJClient
 from scraper.pipeline import enrich, harvest

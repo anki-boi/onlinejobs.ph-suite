@@ -8,7 +8,6 @@ Both phases are generators that yield PipelineEvent objects.
 """
 
 import logging
-import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Generator
@@ -17,7 +16,6 @@ from urllib.parse import quote_plus
 from scraper.client import OJClient, ScrapeStopped, RateLimitExhausted
 from scraper.parsers import (
     JobDetail,
-    JobStub,
     get_total_results,
     parse_job_detail,
     parse_search_results,

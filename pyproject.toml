@@ -12,6 +12,6 @@ line-length = 110
 target-version = "py311"
 
 [tool.ruff.lint]
-# W1.1: only codes the codebase already passes. W1.3/W2.10 widen to the full
-# "F" set and clear the 25 pre-existing unused import/assignment findings.
-select = ["E9", "F63", "F7", "F811", "F821"]
+# W1.3: widened to the full F set (unused imports/vars, undefined names, bad
+# star imports, f-string placeholders) — the 27 pre-existing findings were cleared.
+select = ["E9", "F"]

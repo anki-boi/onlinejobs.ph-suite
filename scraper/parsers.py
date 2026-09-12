@@ -8,7 +8,6 @@ This is the testable core of the scraper.
 import logging
 import re
 from dataclasses import dataclass, field
-from html import unescape
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -175,9 +174,7 @@ def _parse_title_with_badge(h4) -> tuple[str, str | None]:
     """
     badge = h4.select_one(".badge")
     work_type = _clean(badge.get_text()) if badge else None
-    # Remove the badge from a copy to get clean title
-    h4_copy = h4.__copy__() if hasattr(h4, '__copy__') else h4
-    # Simpler: just get all text and subtract the badge text
+    # Get all text and subtract the badge text
     full_text = _clean(h4.get_text()) or ""
     if work_type and work_type in full_text:
         title = full_text.replace(work_type, "").strip()

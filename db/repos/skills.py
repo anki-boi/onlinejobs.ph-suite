@@ -39,10 +39,6 @@ def search_skills(conn: sqlite3.Connection, keyword: str) -> list[sqlite3.Row]:
 
 def get_categories(conn: sqlite3.Connection) -> list[dict]:
     """Distinct top-level categories with counts."""
-    rows = conn.execute(
-        "SELECT category_path, COUNT(*) as cnt FROM skill_tags "
-        "WHERE category_path != '' GROUP BY split(category_path, ' > ', 1) ORDER BY 1"
-    ).fetchall() if False else []
     # SQLite doesn't have split(); do it in Python
     all_rows = conn.execute("SELECT category_path FROM skill_tags WHERE category_path != ''").fetchall()
     cats: dict[str, int] = {}

@@ -4,7 +4,6 @@ tests/test_api.py — FastAPI endpoint tests using the TestClient.
 
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -14,8 +13,6 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from fastapi.testclient import TestClient
 from app.server import app
-from db.connection import init_db, BASE_DIR, SCHEMA
-import sqlite3
 
 
 @pytest.fixture

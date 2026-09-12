@@ -1,7 +1,6 @@
 """Tests for the /api/resume/build (1-page Harvard CV) endpoints."""
 import sys
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -94,7 +93,6 @@ def test_build_success_lists_and_serves(client, monkeypatch, tmp_path):
 
 def test_build_503_without_toolchain(client, monkeypatch):
     _seed_job(client)
-    from app import server as srv
     monkeypatch.setattr(resume_yamlcv, "available", lambda: False)
     r = client.post("/api/resume/build", json={"job_id": 1})
     assert r.status_code == 503 and "rendercv" in r.json()["detail"]
@@ -126,6 +124,5 @@ def test_built_list_empty_and_name_traversal_blocked(client):
 
 
 def test_yamlcv_status_endpoint(client, monkeypatch):
-    from app import server as srv
     monkeypatch.setattr(resume_yamlcv, "available", lambda: True)
     assert client.get("/api/resume/yamlcv-status").json() == {"available": True}

@@ -15,7 +15,6 @@ import pytest
 @pytest.fixture
 def tmp_db(tmp_path):
     """Create a temp DB and return a connection."""
-    from db.connection import init_db
     import sqlite3
     conn = sqlite3.connect(str(tmp_path / "test.db"))
     conn.row_factory = sqlite3.Row

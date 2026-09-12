@@ -375,7 +375,6 @@ def get_jobs_needing_enrichment(
     stray rows (e.g. test fixtures pointing at fake domains) would otherwise burn
     retries and produce an error on every check run.
     """
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     clauses = [
         "(last_checked IS NULL OR last_checked = '' OR last_checked < datetime('now', ?))"
     ]

@@ -1,0 +1,10 @@
+# Line endings are load-bearing: sh scripts and the pre-push hook must
+# check out as LF on Windows, .bat launchers must stay CRLF.
+*.sh text eol=lf
+*.bat text eol=crlf
+.githooks/* text eol=lf
+*.py text
+*.json text
+*.md text
+*.css text
+*.js text

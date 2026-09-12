@@ -1,0 +1,4 @@
+#!/bin/sh
+# .githooks/pre-push — refuse to push while the gate is red.
+# Wired via: git config core.hooksPath .githooks  (done once per clone)
+exec sh tools/gate.sh

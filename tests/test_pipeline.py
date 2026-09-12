@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scraper.pipeline import enrich, harvest, PipelineEvent
+from scraper.pipeline import enrich, harvest
 from tests.test_parsers import CLOSED_HTML, DETAIL_HTML, SEARCH_HTML
 
 

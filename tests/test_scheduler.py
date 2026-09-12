@@ -7,7 +7,6 @@ injected `client_factory`.
 """
 
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -103,7 +102,6 @@ def test_run_once_follow_up_alert(conn):
 
 
 def test_tick_sets_last_and_next_run(conn, monkeypatch):
-    import db.connection as dbconn
     monkeypatch.setattr(scheduler, "run_once", lambda client, c, p: {"inserted": 0})
     before = time.time()
     scheduler.tick(lambda: SchedulerClient())
@@ -139,7 +137,6 @@ def test_tick_skips_while_manual_run_holds_lock(conn, monkeypatch):
 
 
 def test_start_spawns_daemon_thread_and_ticks():
-    import db.connection as dbconn
     t = scheduler.start(interval_sec=300, on_tick=lambda: None)
     assert t.daemon
     t = scheduler.start(interval_sec=300, on_tick=lambda: None)

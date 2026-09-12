@@ -5,11 +5,8 @@ Fixtures are stored in tests/fixtures/ as .html files.
 For now we test with synthetic HTML that matches the real structure.
 """
 
-import pytest
 
 from scraper.parsers import (
-    JobDetail,
-    JobStub,
     extract_job_id,
     get_total_results,
     parse_job_detail,

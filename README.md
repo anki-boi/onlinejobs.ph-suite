@@ -189,3 +189,9 @@ JOBS_DB_PATH=/tmp/sandbox.db python main.py --port 8372   # run against a DB cop
 
 `JOBS_DB_PATH` (absolute, or relative to the project dir) overrides `db_path` —
 used to test against a copy of a real database.
+
+## License
+
+Copyright (c) 2025–2026 Jeyson Anki. **All rights reserved.** This repository is
+private; no open-source license is granted, and the absence of a `LICENSE`
+file is deliberate. Do not copy code from here without permission.
