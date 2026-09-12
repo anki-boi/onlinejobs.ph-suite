@@ -10,7 +10,6 @@ Set JOBS_DB_PATH (abs or relative to project root) to use an alternate DB file
 (e.g. a sandbox copy for testing).
 """
 
-import json
 import os
 import sqlite3
 from pathlib import Path
@@ -85,20 +84,11 @@ SCHEMA = """
         CREATE INDEX IF NOT EXISTS idx_history_job_id    ON job_history(job_id);
     """
 
-_config: dict | None = None
-
-
 def load_config() -> dict:
-    """Lazy-loaded config (avoids circular import when this module is loaded first)."""
-    global _config
-    if _config is None:
-        cfg_path = BASE_DIR / "config.json"
-        cfg: dict = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
-        local = BASE_DIR / "config.local.json"
-        if local.exists():
-            cfg = {**cfg, **json.loads(local.read_text())}
-        _config = cfg
-    return _config
+    """The live merged config (W1.4): app/config.py owns the state — reload()
+    replaces it, so this no longer caches a stale copy forever."""
+    from app import config as appconfig
+    return appconfig.get()
 
 
 def get_config() -> dict:

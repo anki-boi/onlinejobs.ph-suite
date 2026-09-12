@@ -508,3 +508,23 @@ th.sorted-desc .th-label::after { content: '▼'; }
   margin-top: 3px; font-family: var(--mono); font-size: 0.72rem;
   color: var(--accent);
 }
+
+/* W1.4: dismissable "optional features off" config banner */
+.config-banner {
+  background: #fff7e0;
+  border-bottom: 1px solid #e6c766;
+  color: #5c4a00;
+  padding: 8px 16px;
+  font-size: 13px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.config-banner .cb-msg { flex: 1; min-width: 200px; }
+.config-banner button {
+  font: inherit; font-size: 12px; font-weight: 600;
+  border: 1px solid #e6c766; background: #fff; color: #5c4a00;
+  border-radius: 6px; padding: 3px 10px; cursor: pointer;
+}
+.config-banner button:hover { background: #f3e3ac; }

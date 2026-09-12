@@ -60,6 +60,36 @@ function fmtDate(s) {
 function esc(s) { const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
 
 // ── Stats ───────────────────────────────────────────────────────────────────
+// W1.4: optional-features-off banner (e.g. LLM tailoring not configured).
+// Dismissal is remembered per message — a different note shows again.
+async function loadConfigBanner() {
+  const el = $('#config-banner');
+  if (!el) return;
+  let r;
+  try { r = await api('/api/config'); } catch (e) { return; }
+  const msgs = r.features_off || [];
+  if (!msgs.length) { el.hidden = true; el.innerHTML = ''; return; }
+  const sig = JSON.stringify(msgs);
+  if (localStorage.getItem('cb-dismissed') === sig) { el.hidden = true; return; }
+  el.hidden = false;
+  el.innerHTML = `<div class="cb-msg">${msgs.map(esc).join('<br>')}</div>
+    <button id="cb-reload" title="Re-read config.json + config.local.json">Reload config</button>
+    <button id="cb-dismiss" title="Hide this note">✕</button>`;
+  $('#cb-reload').onclick = async (b) => {
+    b.textContent = 'Reloading…';
+    try {
+      const res = await api('/api/config/reload', { method: 'POST' });
+      toast(res.changed ? 'Config reloaded — new values are live' : 'Config reloaded — no changes found');
+      localStorage.removeItem('cb-dismissed');
+    } catch (e) { toast('Reload failed: ' + e.message, 'err'); }
+    loadConfigBanner();
+  };
+  $('#cb-dismiss').onclick = () => {
+    localStorage.setItem('cb-dismissed', sig);
+    el.hidden = true;
+  };
+}
+
 async function loadStats() {
   try {
     const s = await api('/api/stats');
@@ -1102,6 +1132,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
   loadScrapeScope();
   loadCategories();
   loadSkills();
+  loadConfigBanner();
   initResumePanel();
   loadResumeStatus();
   loadBuiltCvs();

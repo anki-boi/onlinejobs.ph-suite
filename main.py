@@ -9,7 +9,6 @@ Usage:
 """
 
 import argparse
-import json
 import logging
 import logging.handlers
 import sys
@@ -27,10 +26,10 @@ from scraper.client import OJClient
 
 
 def load_config() -> dict:
-    cfg_path = PROJECT_ROOT / "config.json"
-    if cfg_path.exists():
-        return json.loads(cfg_path.read_text())
-    return {}
+    """The live merged config (W1.4) — config.json + gitignored overlay, owned
+    by app/config.py; the old copy ignored config.local.json."""
+    from app import config as appconfig
+    return appconfig.get()
 
 
 def initial_skills_refresh(cfg: dict) -> None:

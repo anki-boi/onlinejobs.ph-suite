@@ -66,11 +66,16 @@ app = FastAPI(title="Job Hunter", lifespan=_lifespan)
 STATIC_DIR = dbconn.BASE_DIR / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-_cfg_path = dbconn.BASE_DIR / "config.json"
-_cfg = json.loads(_cfg_path.read_text()) if _cfg_path.exists() else {}
-_local_cfg = dbconn.BASE_DIR / "config.local.json"   # gitignored overlay (keys etc.)
-if _local_cfg.exists():
-    _cfg = {**_cfg, **json.loads(_local_cfg.read_text())}
+class _LiveCfg:
+    """W1.4: every read goes to the live config state, so a
+    POST /api/config/reload is picked up immediately (no restart)."""
+
+    def get(self, key, default=None):
+        from app import config as appconfig
+        return appconfig.get().get(key, default)
+
+
+_cfg = _LiveCfg()
 
 _client: OJClient | None = None
 RESUME_PATH = dbconn.BASE_DIR / "resumes" / "master.json"
@@ -264,6 +269,27 @@ def update_follow_up(job_pk: int, body: FollowUpUpdate):
 @app.get("/api/stats")
 def stats():
     return job_repo.get_stats(get_db())
+
+
+# ── Config (W1.4) ───────────────────────────────────────────────────────────
+
+@app.get("/api/config")
+def get_config_view():
+    """Live config for display — secrets redacted — plus the optional features
+    currently off (drives the dismissable UI banner)."""
+    from app import config as appconfig
+    return {"config": appconfig.redacted(), "features_off": appconfig.features_off()}
+
+
+@app.post("/api/config/reload")
+def reload_config():
+    """Re-read config.json + config.local.json; the new values are live
+    immediately (LLM tailoring is the motivating case — no restart)."""
+    from app import config as appconfig
+    before = appconfig.get()
+    appconfig.reload()
+    after = appconfig.get()
+    return {"ok": True, "changed": before != after, "features_off": appconfig.features_off()}
 
 
 # ── Auto-run ────────────────────────────────────────────────────────────────
