@@ -99,7 +99,7 @@ def test_v5_backfill_legacy_db(tmp_path, monkeypatch):
 
     dbmigrate.run(conn, dbconn.SCHEMA_VERSION)
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == dbconn.SCHEMA_VERSION
     u1 = _row(conn, "u1")
     assert u1["salary_currency"] == "USD"
     assert u1["salary_monthly_min"] == 46400.0
@@ -126,7 +126,7 @@ def test_v5_backfill_fresh_schema_db(tmp_path, monkeypatch):
     _set_live_config(monkeypatch, {"fx_to_php": {"usd": DEFAULT_USD}})
     conn = _make_db(tmp_path, 4, legacy=False)
     dbmigrate.run(conn, dbconn.SCHEMA_VERSION)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == dbconn.SCHEMA_VERSION
     assert _row(conn, "u1")["salary_monthly_max"] == 46400.0
     assert _row(conn, "u2")["salary_monthly_max"] == 60000.0
     assert _row(conn, "u3")["salary_monthly_max"] is None
@@ -186,7 +186,7 @@ def test_fresh_db_reaches_v5(tmp_path, monkeypatch):
     _set_live_config(monkeypatch, {"fx_to_php": {"usd": DEFAULT_USD}})
     monkeypatch.setattr(dbconn, "DB_PATH", str(tmp_path / "fresh.db"))
     conn = dbconn.init_db()
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == dbconn.SCHEMA_VERSION
     cols = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
     assert {"salary_currency", "salary_monthly_min", "salary_monthly_max"} <= cols
 

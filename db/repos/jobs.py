@@ -109,6 +109,7 @@ def get_jobs(
     posted_from: str | None = None,
     posted_to: str | None = None,
     has_salary: bool = False,
+    min_ats: int = 0,
     salary_min_monthly: float | None = None,
     salary_max_monthly: float | None = None,
     salary_currency: str | None = None,
@@ -199,6 +200,15 @@ def get_jobs(
             placeholders = ",".join("?" * len(curs))
             clauses.append(f"salary_currency IN ({placeholders})")
             params.extend(curs)
+
+    # W4.3: best-profile ATS at SQL level (materialized ats_scores, W4.3) so
+    # `total` is a truthful global count, not a per-page Python filter.
+    if min_ats:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM ats_scores a "
+            "WHERE a.job_id = jobs.id AND a.total >= ?)"
+        )
+        params.append(min_ats)
 
     if search:
         like = f"%{search}%"

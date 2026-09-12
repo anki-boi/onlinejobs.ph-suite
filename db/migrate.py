@@ -16,6 +16,7 @@ CLI:  python -m db.migrate --dry-run [--db PATH]
 import logging
 
 from db.migrations.v5_salary_currency import step as _v5
+from db.migrations.v6_ats_scores import step as _v6
 
 log = logging.getLogger(__name__)
 
@@ -126,6 +127,7 @@ MIGRATIONS: dict[int, callable] = {
     3: _v3,
     4: _v4,
     5: _v5,
+    6: _v6,
 }
 
 

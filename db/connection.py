@@ -19,7 +19,7 @@ import db.migrate as dbmigrate  # versioned migration registry (W2.7)
 # Bump when the migration in db/migrate.py changes. A DB file at a lower
 # version runs each unapplied step exactly once, on the next init_db(); a
 # fresh file runs all steps as no-ops and lands at this version.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -68,6 +68,14 @@ TABLES = """
             old_status  TEXT,
             new_status  TEXT,
             changed_at  TEXT DEFAULT (datetime('now'))
+        );
+
+        CREATE TABLE IF NOT EXISTS ats_scores (
+            job_id      INTEGER NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+            profile     TEXT    NOT NULL,
+            total       REAL    NOT NULL,
+            updated_at  TEXT    NOT NULL,
+            PRIMARY KEY (job_id, profile)
         );
 
         CREATE TABLE IF NOT EXISTS skill_tags (

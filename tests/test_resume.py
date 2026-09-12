@@ -300,8 +300,6 @@ def test_jobs_min_ats_filter(client, conn, tmp_path, monkeypatch):
     import app.server as srv
     from db.repos import jobs as job_repo
     monkeypatch.setattr(srv, "MASTERS_PATH", Path(__file__).parent.parent / "resumes" / "masters.json")
-    srv._ats_memo.clear()
-    srv._ats_memo_key = None
     # Job A: skills two of his profiles have (Excel + Data Entry-ish) — expect >= 50
     job_repo.upsert_stub(conn, job_id=1, job_url="http://a", title="Excel & Data Entry Assistant",
                          skills=["Excel", "Data Entry"])

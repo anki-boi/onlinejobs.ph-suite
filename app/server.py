@@ -90,24 +90,13 @@ BASE_RESUMES = dbconn.BASE_DIR / "resumes"
 def _masters() -> dict:
     return resume_schema.load_masters(MASTERS_PATH)
 
-# per-process memo of best-profile ATS per job (W2.3): invalidated by the jobs
-# version counter (any in-place score-field change) or a masters.json change.
-_ats_memo: dict[int, tuple] = {}
-_ats_memo_key = None
 
-def _best_ats_for_row(conn, r) -> tuple:
-    global _ats_memo_key
-    # W2.3: key on the jobs version counter — any in-place change to a job's
-    # score fields (enrichment, re-harvest) bumps it, so this memo re-scores;
-    # masters.json mtime covers resume-side changes.
-    key = (job_repo.get_jobs_version(conn),
-           MASTERS_PATH.stat().st_mtime if MASTERS_PATH.exists() else 0)
-    if key != _ats_memo_key:
-        _ats_memo.clear()
-        _ats_memo_key = key
-    if r["id"] not in _ats_memo:
-        _ats_memo[r["id"]] = resume_schema.best_profile_for_job(_masters(), _job_dict_for_resume(r))
-    return _ats_memo[r["id"]]
+def _ats_cache_key(conn) -> str:
+    """Invalidation key for the materialized ATS cache (W4.3): any in-place
+    score-field change bumps the jobs version counter; masters.json mtime
+    covers resume-side changes."""
+    mtime = MASTERS_PATH.stat().st_mtime if MASTERS_PATH.exists() else 0
+    return f"{job_repo.get_jobs_version(conn)}:{mtime}"
 
 
 # Default UA — a missing/empty config value must never override it with "".
@@ -259,6 +248,10 @@ def list_jobs(
     min_ats: int = 0,  # hide jobs whose best-profile ATS score is below this
 ):
     conn = get_db()
+    from app.services import ats_cache
+    ats_cache.ensure_fresh(
+        conn, _ats_cache_key(conn), _masters(),
+        conn.execute("SELECT * FROM jobs"), _job_dict_for_resume)
     rows, total = job_repo.get_jobs(
         conn, page=page, per_page=per_page, status=status,
         search=search, include_hidden=include_hidden,
@@ -268,19 +261,11 @@ def list_jobs(
         location=location, hours=hours,
         posted_from=posted_from, posted_to=posted_to,
         has_salary=has_salary,
+        min_ats=min_ats,
         salary_min_monthly=salary_min_monthly,
         salary_max_monthly=salary_max_monthly,
         salary_currency=salary_currency,
     )
-    if min_ats:
-        kept = []
-        for r in rows:
-            _, sc = _best_ats_for_row(conn, r)
-            if sc["total"] >= min_ats:
-                kept.append(r)
-        # ponytail: filters the fetched page (UI loads per_page=99999 = full set);
-        # small per_page + min_ats would be per-page, not global.
-        rows, total = kept, len(kept)
     return {"jobs": [dict(r) for r in rows], "total": total, "page": page, "per_page": per_page}
 
 

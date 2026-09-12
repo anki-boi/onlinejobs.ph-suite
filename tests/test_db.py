@@ -482,28 +482,36 @@ class TestJobsVersionW23:
         job_repo.upsert_stub(conn, job_id=4, job_url="http://oj/job/4", title="Dev")
         assert job_repo.get_jobs_version(conn) == v0
 
-    def test_memo_rescores_after_in_place_enrichment(self, conn, monkeypatch):
+    def test_materialized_ats_rescores_after_in_place_enrichment(self, conn, monkeypatch):
+        # W4.3 replaced the W2.3 per-process memo with the materialized
+        # ats_scores cache — same invalidation semantics, now in the DB.
         from app import server as srv
-        srv._ats_memo.clear()
-        srv._ats_memo_key = None
+        from app.services import ats_cache
 
         def fake_best(masters, job):
             text = " ".join(filter(None, [
                 job.get("title") or "", job.get("skills") or "", job.get("description") or ""]))
-            return ("master", 10 if "python" in text.lower() else 0)
+            return ("master", {"total": 10.0 if "python" in text.lower() else 0.0})
 
         monkeypatch.setattr(srv.resume_schema, "best_profile_for_job", fake_best)
-
         rid, _ = job_repo.upsert_stub(conn, job_id=5, job_url="http://oj/job/5",
                                       title="Python Developer")
-        row = job_repo.get_job(conn, rid)
-        assert srv._best_ats_for_row(conn, row)[1] == 10
-        # the memo is warm now — prove the enrich busts it, not just a miss
-        assert srv._best_ats_for_row(conn, row)[1] == 10
 
-        job_repo.enrich_job(conn, rid, title="AI Engineer")
-        row2 = job_repo.get_job(conn, rid)
-        assert srv._best_ats_for_row(conn, row2)[1] == 0
+        def score(job_id):
+            return conn.execute(
+                "SELECT total FROM ats_scores WHERE job_id=?", (job_id,)
+            ).fetchone()[0]
+
+        ats_cache.ensure_fresh(conn, srv._ats_cache_key(conn),
+                               srv._masters(), conn.execute("SELECT * FROM jobs"),
+                               srv._job_dict_for_resume)
+        assert score(rid) == 10.0
+
+        job_repo.enrich_job(conn, rid, title="AI Engineer")  # bumps the jobs version
+        ats_cache.ensure_fresh(conn, srv._ats_cache_key(conn),
+                               srv._masters(), conn.execute("SELECT * FROM jobs"),
+                               srv._job_dict_for_resume)
+        assert score(rid) == 0.0
 
 
 class TestVersionedMigrationsW27:
