@@ -78,7 +78,6 @@ class TestAcquireRelease:
         assert settings_repo.instance_lock_holder(conn)["pid"] == __import__("os").getpid()
 
     def test_alive_but_quiet_holder_is_stale(self, conn, live_pid):
-        import os
         settings_repo.acquire_instance_lock(conn, pid=live_pid)
         # backdate the heartbeat past the 5-minute staleness window
         row = conn.execute(
@@ -96,7 +95,6 @@ class TestAcquireRelease:
         assert settings_repo.acquire_instance_lock(conn, pid=os.getpid()) is True
 
     def test_heartbeat_refreshes(self, conn):
-        import os
         settings_repo.acquire_instance_lock(conn, pid=os.getpid())
         row = conn.execute(
             "SELECT value FROM app_settings WHERE key = ?", (settings_repo.INSTANCE_LOCK_KEY,)
