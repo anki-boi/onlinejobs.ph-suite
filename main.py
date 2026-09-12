@@ -6,6 +6,15 @@ Usage:
     python main.py              # Start server on port 8371
     python main.py --port 8080  # Custom port
     python main.py --host 0.0.0.0
+
+Ctrl-C / shutdown (W2.9): the first Ctrl-C sends a stop signal to the
+in-flight pipeline run (if any), then uvicorn stops accepting connections
+and waits for the run's stream to end — up to 10 seconds (forced after);
+a second Ctrl-C during shutdown exits immediately. If the in-flight run was
+the auto-run thread (not an open stream), main() waits up to 10 s more for it
+to finish and record its status before exiting. The process ends with a
+summary line: last run time + status (completed / stopped with partial
+results / failed). jobs.db is closed by the app's lifespan shutdown.
 """
 
 import argparse
@@ -79,6 +88,53 @@ def _setup_logging() -> None:
     logger.setLevel(logging.INFO)
 
 
+def make_server(host: str, port: int):
+    """uvicorn server with the W2.9 graceful-shutdown hook installed:
+    on SIGINT/SIGTERM it first flips the in-flight run's stop token (via
+    scheduler.stop_run) and then lets uvicorn drain (≤10 s force cap)."""
+    import uvicorn
+    from app import scheduler
+
+    server = uvicorn.Server(uvicorn.Config(
+        "app.server:app",
+        host=host,
+        port=port,
+        log_level="info",
+        timeout_graceful_shutdown=10,
+    ))
+    orig_handle_exit = server.handle_exit
+
+    def handle_exit(sig, frame):
+        if scheduler.stop_run():
+            print("\n  [..] Stop signal sent to the running pipeline; "
+                  "waiting for it to end (max 10 s)...")
+        else:
+            print("\n  [..] Shutting down...")
+        orig_handle_exit(sig, frame)
+
+    server.handle_exit = handle_exit
+    return server
+
+
+def shutdown_summary() -> None:
+    """W2.9: the final line after uvicorn drains — where the last run ended."""
+    import db.connection as dbconn
+    from db.repos import settings as settings_repo
+
+    conn = dbconn.get_conn()
+    last_run = settings_repo.get(conn, "last_run", "")
+    last_status = settings_repo.get(conn, "last_status", "")
+    last_error = settings_repo.get(conn, "last_error", "")
+    conn.close()
+
+    line = f"  Job Hunter stopped. Last run: {last_run or 'never'}"
+    if last_status == "failed":
+        line += f" (failed: {last_error})"
+    elif last_status == "stopped":
+        line += " (stopped - partial results kept in jobs.db)"
+    print(line)
+
+
 def main():
     _setup_logging()
     parser = argparse.ArgumentParser(description="Job Hunter — OnlineJobs.ph tracker")
@@ -99,15 +155,21 @@ def main():
         initial_skills_refresh(cfg)
 
     # Run server
-    import uvicorn
     from app import scheduler
     scheduler.start()  # daemon thread: auto-run harvest+enrich on the configured interval
-    uvicorn.run(
-        "app.server:app",
-        host=args.host,
-        port=args.port,
-        log_level="info",
-    )
+    server = make_server(args.host, args.port)
+    try:
+        server.run()
+    except KeyboardInterrupt:
+        pass  # second Ctrl-C during shutdown: exit now
+    if not server.force_exit:
+        # W2.9: the auto-run thread is a bare daemon thread (not an open
+        # connection), so uvicorn's drain won't wait for it. Give it up to
+        # 10 s to notice the stop token, finish, and record its status before
+        # the summary prints. The pipeline lock means at most one run is in
+        # flight, so this never stacks on the SSE drain cap.
+        scheduler.wait_runs(10)
+    shutdown_summary()
 
 
 if __name__ == "__main__":

@@ -150,6 +150,18 @@ snapshot into `backups/`, keeping the last N (from `config.json`
 `GET /health` returns `{"status": "ok", "pid": ...}` — useful for monitoring,
 Docker health checks, or Windows Task Manager restart scripts.
 
+## Shutdown (Ctrl-C)
+
+The first **Ctrl-C** sends a stop signal to the in-flight pipeline run (if
+any), then uvicorn stops accepting connections and waits for the run's stream
+to end — **at most 10 seconds**, after which it forces the shutdown. A
+**second Ctrl-C** during shutdown exits immediately.
+
+The process ends with a summary line — where the last run landed, e.g.
+`Last run: 2026-02-24 10:00:00 (stopped - partial results kept in jobs.db)`
+— and closes its database handles. Stopped runs are recorded as `stopped`
+(partial results kept), never `failed`; only a raised error is `failed`.
+
 ## Logging
 
 Log files rotate at 5 MB each (3 backups) and land in `job_hunter.log*`. A copy

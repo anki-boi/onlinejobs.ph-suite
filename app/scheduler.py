@@ -86,6 +86,17 @@ def stop_run(run_id: str | None = None) -> bool:
     return False
 
 
+def wait_runs(timeout: float) -> bool:
+    """W2.9: wait until every registered run has ended (its finally-block
+    released it), or the deadline passes. Returns True if all ended."""
+    deadline = time.time() + timeout
+    while active_runs:
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.1)
+    return True
+
+
 def record_run_status(conn, stopped: bool = False, error: str | None = None) -> None:
     """W2.8: persist a run's outcome. A stopped run is 'stopped' (with its
     partial results) — never 'failed'. Only a raised error is 'failed'."""
