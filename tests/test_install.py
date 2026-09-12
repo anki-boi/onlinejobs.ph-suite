@@ -16,25 +16,37 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # Modules that import pymupdf at their top; must be re-importable fresh below.
-_PYMUPDF_MODS = ["resumes.digest", "resumes.yamlcv"]
+_PYMUPDF_MODS = [("resumes.digest", "digest"), ("resumes.yamlcv", "yamlcv")]
 
 
 @pytest.fixture
 def no_pymupdf(monkeypatch):
-    """Make `import pymupdf` fail, as on a machine where it is not installed."""
-    for name in _PYMUPDF_MODS:
-        monkeypatch.delitem(sys.modules, name, raising=False)
+    """Make `import pymupdf` fail, as on a machine where it is not installed.
+
+    Submodules are unbound from both sys.modules and their parent package —
+    `from resumes import yamlcv` resolves via the package attribute, which
+    would otherwise skip re-execution and the pymupdf import entirely.
+    """
+    import resumes
+    for mod, attr in _PYMUPDF_MODS:
+        monkeypatch.delitem(sys.modules, mod, raising=False)
+        monkeypatch.delattr(resumes, attr, raising=False)
     monkeypatch.setitem(sys.modules, "pymupdf", None)
     yield
 
 
 def test_import_app_server_without_pymupdf(no_pymupdf):
+    import app as app_pkg
     saved = sys.modules.pop("app.server", None)
+    saved_attr = getattr(app_pkg, "server", None)
     try:
         fresh = importlib.import_module("app.server")
     finally:
+        # importlib also rebinds the parent package's `server` attribute —
+        # restore it or later tests import a different module object.
         if saved is not None:
             sys.modules["app.server"] = saved
+            app_pkg.server = saved_attr
     assert fresh is not saved, "expected a fresh module object"
     from fastapi import FastAPI
     assert isinstance(fresh.app, FastAPI)
