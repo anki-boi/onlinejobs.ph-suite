@@ -16,6 +16,8 @@ if git grep -nF -e 'Dropbox' -e 'C:\Users\' -- '*.py'; then
 fi
 
 # W1.6: README truthfulness (config keys documented; no stale counts)
+# W3.1: live drift check (exit 0 with warn when offline; exit 1 on markup drift)
+python tools/check_fixtures.py
 python tools/check_readme.py
 
 echo "gate: PASS"

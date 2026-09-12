@@ -1,5 +1,6 @@
 """
-scraper/parsers.py — Pure HTML→dataclass parsers. No I/O, no globals.
+scraper/parsers.py — Pure HTML→dataclass parsers. No I/O; the only module
+state is the SELECTORS table and the MISSING_FIELDS counter (W3.2).
 
 Each function takes an HTML string and returns structured data.
 This is the testable core of the scraper.
@@ -13,6 +14,52 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 
 log = logging.getLogger(__name__)
+
+# ── Selector table (W3.2) ──────────────────────────────────────────────────
+# Single source of truth for every CSS selector the parsers use. Each value
+# is an ordered FALLBACK CHAIN: the first selector matching wins. Live markup
+# (2026-09-13) puts the company name in the logo img's alt, older markup in
+# p[data-temp] — the chain covers both. A field whose whole chain misses
+# degrades to None and bumps MISSING_FIELDS, so a broken selector is counted
+# and logged, never silently swallowed into an empty job.
+SELECTORS: dict[str, list[str]] = {
+    "search.job_box":   [".jobpost-cat-box.latest-job-post"],
+    "search.job_link":  ["a[href*='/jobseekers/job/']"],
+    "search.title":     ["h4"],
+    # work_type badge (descendant of the title h4; _parse_title_with_badge
+    # selects it relative to the h4, hence no h4 prefix in the chain)
+    "search.work_type": [".badge"],
+    # company: old markup had it in the <p data-temp> text; live markup only
+    # has "Posted on …" there, so the company comes from the logo img's alt.
+    "search.company":   ["p[data-temp]", "img.jobpost-cat-box-logo", "img"],
+    "search.posted":    ["p[data-temp]"],
+    "search.salary":    ["dd.col"],
+    "search.desc":      [".desc a:not([target])", ".desc"],
+    "search.skills":    [".job-tag a"],
+    # no bare-<h1> fallback: the soft-404 page's h1 ("Oops, we lost you
+    # there") is not a job title and must not be read as one
+    "detail.title":     ["h1.job__title"],
+    "detail.company":   ["h3.job__logo", "h3"],
+    "detail.employer":  ["h3.job__logo img", "h3 img"],
+    "detail.desc":      ["p#job-description", ".job-description"],
+    "detail.fields":    ["h3.fs-12"],
+    "detail.skills":    ["a.card-worker-topskill"],
+    "detail.closed":    ["h3.text-warning", ".alert-warning"],
+}
+
+# per-process counter of fields lost to selector misses (tests reset via clear)
+from collections import Counter
+MISSING_FIELDS: Counter = Counter()
+
+
+def _first(scope, key: str):
+    """First element in SELECTORS[key] that matches in `scope` (soup or box).
+    Returns the element or None (caller decides how to degrade)."""
+    for sel in SELECTORS[key]:
+        el = scope.select_one(sel)
+        if el is not None:
+            return el
+    return None
 
 
 # ── Data classes ────────────────────────────────────────────────────────────
@@ -90,7 +137,7 @@ def _parse_structured_fields(soup: BeautifulSoup) -> dict[str, str]:
     Returns dict like {"TYPE OF WORK": "Part Time", "WAGE / SALARY": "$5", ...}
     """
     fields: dict[str, str] = {}
-    for h3 in soup.select("h3.fs-12"):
+    for h3 in soup.select(SELECTORS["detail.fields"][0]):
         label = _clean(h3.get_text())
         if not label:
             continue
@@ -129,22 +176,29 @@ def _parse_posted_date(box) -> str | None:
 
 
 def _parse_company_from_box(box) -> str | None:
-    """Extract company name from p[data-temp] text (before the bullet)."""
-    p_el = box.select_one("p[data-temp]")
-    if not p_el:
-        return None
-    text = p_el.get_text(" ", strip=True)
-    # Pattern: "CompanyName •    Posted on ..."
-    if "•" in text:
-        company = text.split("•")[0].strip()
-        return company or None
-    # Some boxes have no bullet — try the <em> tag
-    em = p_el.find("em")
-    if em:
-        before = p_el.get_text(" ", strip=True).replace(
-            em.get_text(" ", strip=True), ""
-        ).strip(" •")
-        return before or None
+    """Company via the SELECTORS['search.company'] fallback chain:
+    1. p[data-temp] text — old markup 'CompanyName • Posted on …'
+    2. img.jobpost-cat-box-logo alt — live markup
+    3. any img alt
+    A full miss bumps MISSING_FIELDS instead of silently returning None."""
+    p_el = box.select_one(SELECTORS["search.company"][0])
+    if p_el:
+        text = p_el.get_text(" ", strip=True)
+        if "•" in text:
+            company = text.split("•")[0].strip()
+            return company or None
+        em = p_el.find("em")
+        if em:
+            before = text.replace(em.get_text(" ", strip=True), "").strip(" •")
+            # live markup: the <em> is the whole "Posted on …" line — not a company
+            if before and "posted on" not in before.lower():
+                return before
+    for sel in SELECTORS["search.company"][1:]:
+        img = box.select_one(sel)
+        if img and img.get("alt"):
+            return _clean(img["alt"])
+    MISSING_FIELDS["search.company"] += 1
+    log.debug("search.company: no company found in job box (logo img missing)")
     return None
 
 
@@ -152,7 +206,7 @@ def _parse_desc_preview(box) -> tuple[str | None, str | None, str | None]:
     """Parse Location/Hours/Compensation from the description preview.
     Returns (location, hours, compensation).
     """
-    desc_a = box.select_one(".desc a:not([target])")
+    desc_a = _first(box, "search.desc")
     if not desc_a:
         return None, None, None
     text = desc_a.get_text("\n", strip=True)
@@ -188,16 +242,18 @@ def _parse_title_with_badge(h4) -> tuple[str, str | None]:
 def parse_search_results(html: str) -> list[JobStub]:
     """Parse a search results page. Returns a list of JobStub (one per job box)."""
     soup = BeautifulSoup(html, "html.parser")
-    boxes = soup.select(".jobpost-cat-box.latest-job-post")
+    sel = SELECTORS["search.job_box"][0]
+    boxes = soup.select(sel)
     if not boxes:
-        log.warning("No job boxes found (.jobpost-cat-box.latest-job-post) — page structure may have changed")
+        log.warning("No job boxes found (%s) — page structure may have changed", sel)
         return []
 
     stubs: list[JobStub] = []
     for box in boxes:
         # URL
-        link_a = box.select_one("a[href*='/jobseekers/job/']")
+        link_a = _first(box, "search.job_link")
         if not link_a:
+            MISSING_FIELDS["search.job_link"] += 1
             continue
         raw_href = link_a.get("href", "")
         if raw_href.startswith("/"):
@@ -209,24 +265,34 @@ def parse_search_results(html: str) -> list[JobStub]:
 
         # Title + work type
         title, work_type = None, None
-        h4 = box.select_one("h4")
+        h4 = _first(box, "search.title")
         if h4:
             title, work_type = _parse_title_with_badge(h4)
+        else:
+            MISSING_FIELDS["search.title"] += 1
 
         # Company, posted date
         company = _parse_company_from_box(box)
         posted_date = _parse_posted_date(box)
+        if not posted_date:
+            MISSING_FIELDS["search.posted"] += 1
 
         # Salary
-        salary_el = box.select_one("dd.col")
+        salary_el = _first(box, "search.salary")
         salary = _clean(salary_el.get_text()) if salary_el else None
+        if not salary:
+            MISSING_FIELDS["search.salary"] += 1
 
         # Description preview → location, hours
         location, hours, _comp = _parse_desc_preview(box)
+        if not location:
+            MISSING_FIELDS["search.location"] += 1
+        if not hours:
+            MISSING_FIELDS["search.hours"] += 1
 
         # Skills
         skills = []
-        for a in box.select(".job-tag a"):
+        for a in box.select(SELECTORS["search.skills"][0]):
             t = _clean(a.get_text())
             if t and t not in skills:
                 skills.append(t)
@@ -263,7 +329,7 @@ def parse_job_detail(html: str, url: str = "") -> JobDetail:
     fields: dict[str, str] = {}
 
     # Title + job ID
-    h1 = soup.select_one("h1.job__title")
+    h1 = _first(soup, "detail.title")
     if h1:
         title = _clean(h1.get_text())
         oid = h1.get("data-jobid")
@@ -272,12 +338,14 @@ def parse_job_detail(html: str, url: str = "") -> JobDetail:
     else:
         # Fallback: extract from URL
         job_id = extract_job_id(url)
+        if job_id is not None:
+            MISSING_FIELDS["detail.title"] += 1
 
     # Company
-    logo_h3 = soup.select_one("h3.job__logo")
+    logo_h3 = _first(soup, "detail.company")
     if logo_h3:
         # Get employer ID from logo URL BEFORE extracting img
-        logo_img = logo_h3.find("img")
+        logo_img = soup.select_one(SELECTORS["detail.employer"][0]) or logo_h3.find("img")
         if logo_img:
             src = logo_img.get("src", "")
             m = re.search(r"employer_logos/(\d+)/", src)
@@ -285,9 +353,11 @@ def parse_job_detail(html: str, url: str = "") -> JobDetail:
                 employer_id = int(m.group(1))
             logo_img.extract()
         company = _clean(logo_h3.get_text())
+    else:
+        MISSING_FIELDS["detail.company"] += 1
 
     # Description: always in <p id="job-description" class="job-description">
-    desc_p = soup.select_one("p#job-description")
+    desc_p = _first(soup, "detail.desc")
     if desc_p:
         oid = desc_p.get("data-jobid")
         if oid and not job_id:
@@ -299,6 +369,9 @@ def parse_job_detail(html: str, url: str = "") -> JobDetail:
             if lines and title[:30] in lines[0]:
                 lines = lines[1:]
             description = "\n".join(lines).strip() or None
+    else:
+        if not soup.select_one("h3.fs-12"):  # no structured card either → really gone
+            MISSING_FIELDS["detail.desc"] += 1
 
     # Structured fields
     fields = _parse_structured_fields(soup)
@@ -308,13 +381,14 @@ def parse_job_detail(html: str, url: str = "") -> JobDetail:
     date_updated = fields.get("DATE UPDATED")
 
     # Skills
-    for a in soup.select("a.card-worker-topskill"):
+    skills = []
+    for a in soup.select(SELECTORS["detail.skills"][0]):
         t = _clean(a.get_text())
         if t and t not in skills:
             skills.append(t)
 
     # Closed detection
-    warning = soup.select_one("h3.text-warning, .alert-warning")
+    warning = _first(soup, "detail.closed")
     if warning and "closed" in warning.get_text().lower():
         is_closed = True
         close_reason = _clean(warning.get_text())
@@ -331,6 +405,8 @@ def parse_job_detail(html: str, url: str = "") -> JobDetail:
             "job no longer posted",
             "no longer visible",
             "has been deleted",
+            # soft-404 page for a removed job (HTTP 404):
+            "oops, we lost you there",
         ):
             if phrase in page_text:
                 is_closed = True
