@@ -254,8 +254,8 @@ def run_once(client, conn, publish, cfg: dict | None = None) -> dict:
     pos = json.loads(settings_repo.get(conn, "positive_keywords", "[]") or "[]")
     neg = json.loads(settings_repo.get(conn, "negative_keywords", "[]") or "[]")
     if pos or neg:
-        from app.server import _apply_keyword_filters  # local import: server imports us
-        neg_h, pos_h, _restored = _apply_keyword_filters(conn, pos, neg)
+        from app.services.keywords import apply_keyword_filters  # no server dependency (W5.1)
+        neg_h, pos_h, _restored = apply_keyword_filters(conn, pos, neg)
         auto_hidden = neg_h + pos_h
         if auto_hidden:
             publish("alert", {
