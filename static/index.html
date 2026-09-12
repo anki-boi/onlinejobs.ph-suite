@@ -196,6 +196,15 @@
         <label class="checkbox-label" title="Only show jobs that list an actual salary amount (hides TBD / Negotiable / none)">
           <input type="checkbox" id="filter-has-salary"> With salary
         </label>
+        <span class="input-group" id="salary-amount-filters" title="Filter by normalized monthly salary in Philippine pesos (the FX rate comes from config.json — set fx_to_php if your rate differs)">
+          <input type="number" id="filter-salary-min" class="input input-sm" placeholder="Min ₱/mo" style="width:88px" min="0">
+          <input type="number" id="filter-salary-max" class="input input-sm" placeholder="Max ₱/mo" style="width:88px" min="0">
+        </span>
+        <select class="select" id="filter-salary-cur" style="width:82px" title="Filter by currency of the listed salary">
+          <option value="">Any&nbsp;cur.</option>
+          <option value="PHP">PHP</option>
+          <option value="USD">USD</option>
+        </select>
         <label class="checkbox-label" title="Include jobs hidden manually or by keyword auto-hide">
           <input type="checkbox" id="filter-hidden"> Show hidden
         </label>

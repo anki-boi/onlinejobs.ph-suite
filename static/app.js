@@ -68,6 +68,7 @@ async function loadConfigBanner() {
   if (!el) return;
   let r;
   try { r = await api('/api/config'); } catch (e) { return; }
+  state.fx = (r.config||{}).fx_to_php || null;  // W4.2: rate for the salary-chip tooltip
   const msgs = r.features_off || [];
   if (!msgs.length) { el.hidden = true; el.innerHTML = ''; return; }
   const sig = JSON.stringify(msgs);
@@ -148,6 +149,13 @@ function buildJobsParams(perPage) {
   if (pf.from) p.set('posted_from', pf.from);
   if (pf.to) p.set('posted_to', pf.to);
   if (state.hasSalaryOnly) p.set('has_salary','1');
+  // W4.2: money filters — normalized PHP/month (raw inputs live in the toolbar)
+  const sMin = ($('#filter-salary-min')||{}).value;
+  const sMax = ($('#filter-salary-max')||{}).value;
+  const sCur = ($('#filter-salary-cur')||{}).value;
+  if (sMin) p.set('salary_min_monthly', sMin);
+  if (sMax) p.set('salary_max_monthly', sMax);
+  if (sCur) p.set('salary_currency', sCur);
   if (state.minAts) p.set('min_ats','50');
   if (state.sort) { p.set('sort', state.sort); p.set('order', state.order); }
   return p;
@@ -175,9 +183,14 @@ function jobRowHtml(j) {
   const skillsArr = j.skills ? (Array.isArray(j.skills) ? j.skills : String(j.skills).split(',')) : [];
   const skillsHtml = skillsArr.slice(0,3).map(s=>`<span class="skill-tag">${esc(String(s).trim())}</span>`).join('');
   const repostBadge = j.repost_of ? '<span class="repost-badge" title="Same title posted again by the same employer — see the original">↻ repost</span>' : '';
-  // Structured salary chip (currency guessed from the raw string: $ = USD, else PHP)
+  // Structured salary chip — currency from the stored field (W4.1); the old
+  // '$'-sniffing guess only for pre-backfill rows. Tooltip shows the FX rate
+  // the normalization used, so "US$800/mo = ₱46,400" is verifiable.
+  const cur = j.salary_currency || ((j.salary||'').includes('$') ? 'USD' : 'PHP');
+  const fxRate = (state.fx||{})[cur];
+  const fxTip = (cur === 'USD' && fxRate) ? ` normalized to ₱ at 1 US$ = ₱${fxRate} (config fx_to_php)` : '';
   const salChip = j.salary_min != null
-    ? `<div class="salary-chip">${(j.salary||'').includes('$') ? 'US$' : '₱'}${j.salary_min===j.salary_max ? j.salary_min.toLocaleString() : j.salary_min.toLocaleString()+'–'+j.salary_max.toLocaleString()}/mo</div>`
+    ? `<div class="salary-chip" title="PHP-normalized monthly${fxTip}">₱${j.salary_min===j.salary_max ? j.salary_min.toLocaleString() : j.salary_min.toLocaleString()+'–'+j.salary_max.toLocaleString()}/mo</div>`
     : '';
   // Two kinds of hidden: yours (solid) vs keyword auto-hide (dashed, remembers what it was)
   const badge = j.status === 'Hidden'
@@ -681,6 +694,8 @@ function init() {
   $('#filter-hidden').addEventListener('change', e=>{state.includeHidden=e.target.checked;loadJobs();});
   $('#filter-reposts').addEventListener('change', e=>{state.hideReposts=e.target.checked;applyVisibleFilter();});
   $('#filter-min-ats').addEventListener('change', e=>{state.minAts=e.target.checked;loadJobs();});
+  for (const id of ['filter-salary-min','filter-salary-max','filter-salary-cur'])
+    $(`#${id}`).addEventListener('change', loadJobs);  // W4.2: money filters
   $('#filter-has-salary').addEventListener('change', e=>{
     state.hasSalaryOnly = e.target.checked;
     updateFunnelIndicators();

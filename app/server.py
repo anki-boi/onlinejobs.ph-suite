@@ -253,6 +253,9 @@ def list_jobs(
     posted_from: str | None = None,  # inclusive range start (YYYY-MM-DD) on the displayed posted date
     posted_to: str | None = None,    # inclusive range end
     has_salary: bool = False,
+    salary_min_monthly: float | None = None,   # job's max (PHP/month) >= this
+    salary_max_monthly: float | None = None,   # job's min (PHP/month) <= this
+    salary_currency: str | None = None,        # comma-separated, e.g. "USD,PHP"
     min_ats: int = 0,  # hide jobs whose best-profile ATS score is below this
 ):
     conn = get_db()
@@ -265,6 +268,9 @@ def list_jobs(
         location=location, hours=hours,
         posted_from=posted_from, posted_to=posted_to,
         has_salary=has_salary,
+        salary_min_monthly=salary_min_monthly,
+        salary_max_monthly=salary_max_monthly,
+        salary_currency=salary_currency,
     )
     if min_ats:
         kept = []

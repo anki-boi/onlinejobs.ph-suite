@@ -109,6 +109,9 @@ def get_jobs(
     posted_from: str | None = None,
     posted_to: str | None = None,
     has_salary: bool = False,
+    salary_min_monthly: float | None = None,
+    salary_max_monthly: float | None = None,
+    salary_currency: str | None = None,
 ) -> tuple[list[sqlite3.Row], int]:
     """Return (rows, total_count) with optional filters and pagination.
 
@@ -180,6 +183,22 @@ def get_jobs(
         # no-salary label (TBD, N/A, Negotiable, DOE, "to be discussed", empty, NULL)
         # regardless of wording. Verified against the live DB: 2,027 in / 283 out.
         clauses.append("salary GLOB '*[0-9]*'")
+
+    # W4.2: money filters on the PHP-normalized columns (W4.1), so a mixed
+    # USD/PHP result set is comparable. Rows without a normalized salary
+    # (TBD/DOE) never match a numeric bound.
+    if salary_min_monthly:
+        clauses.append("salary_monthly_max >= ?")
+        params.append(salary_min_monthly)
+    if salary_max_monthly is not None:
+        clauses.append("COALESCE(salary_monthly_min, salary_monthly_max) <= ?")
+        params.append(salary_max_monthly)
+    if salary_currency:
+        curs = _split_multi(salary_currency)
+        if curs:
+            placeholders = ",".join("?" * len(curs))
+            clauses.append(f"salary_currency IN ({placeholders})")
+            params.extend(curs)
 
     if search:
         like = f"%{search}%"
