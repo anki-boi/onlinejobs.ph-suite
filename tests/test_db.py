@@ -346,6 +346,91 @@ class TestMigrations:
         ).fetchone()[0] == "Open"  # genuinely checked → kept
 
 
+class TestConnectionLifecycle:
+    """W2.1: one shared SQLite connection per (worker thread, db path),
+    closed on shutdown — instead of a fresh sqlite3.connect per request."""
+
+    @staticmethod
+    def _is_closed(conn) -> bool:
+        try:
+            conn.execute("SELECT 1")
+            return False
+        except sqlite3.ProgrammingError:
+            return True
+
+    def test_get_db_reuses_one_connection_per_thread(self, tmp_path, monkeypatch):
+        import db.connection as dbconn
+        from app import deps
+        db_path = str(tmp_path / "life.db")
+        monkeypatch.setattr(dbconn, "DB_PATH", db_path)
+        dbconn.init_db()
+
+        c1 = deps.get_db()
+        c2 = deps.get_db()
+        assert c1 is c2  # same thread, same path → same connection
+        c1.execute("INSERT INTO jobs (job_id, job_url) VALUES (1, 'http://a')")
+        c1.commit()
+        assert c2.execute("SELECT COUNT(*) FROM jobs").fetchone()[0] == 1
+
+    def test_200_requests_keep_connection_count_flat(self, client, monkeypatch):
+        import sqlite3 as _sqlite3
+        from app import deps
+        calls: list = []
+        real_connect = _sqlite3.connect
+
+        def counting(*a, **k):
+            calls.append(1)
+            return real_connect(*a, **k)
+
+        monkeypatch.setattr(_sqlite3, "connect", counting)
+        deps.close_all()  # start from a clean registry
+        for _ in range(50):
+            assert client.get("/api/stats").status_code == 200
+        mid = len(calls)  # first request may open (init + shared) conns once
+        for _ in range(150):
+            assert client.get("/api/stats").status_code == 200
+        assert len(calls) == mid  # 200 sequential requests → connection count flat
+
+    def test_shutdown_closes_shared_connections(self, tmp_path, monkeypatch):
+        import db.connection as dbconn
+        from app import deps
+        from app.server import app
+        from fastapi.testclient import TestClient
+        db_path = str(tmp_path / "shut.db")
+        monkeypatch.setattr(dbconn, "DB_PATH", db_path)
+        dbconn.init_db()
+        conn = None
+        with TestClient(app):  # lifespan shutdown runs on context exit
+            conn = deps.get_db()
+        assert self._is_closed(conn)
+
+    def test_closed_connection_is_transparently_replaced(self, tmp_path, monkeypatch):
+        import db.connection as dbconn
+        from app import deps
+        db_path = str(tmp_path / "stale.db")
+        monkeypatch.setattr(dbconn, "DB_PATH", db_path)
+        dbconn.init_db()
+
+        c1 = deps.get_db()
+        c1.close()  # closed out from under the registry (no .closed flag to notice)
+        c2 = deps.get_db()
+        assert c2 is not c1
+        c2.execute("INSERT INTO jobs (job_id, job_url) VALUES (9, 'http://s')")  # works, not ProgrammingError
+
+    def test_get_db_distinct_paths_distinct_conns_lru(self, tmp_path, monkeypatch):
+        import db.connection as dbconn
+        from app import deps
+        p1 = str(tmp_path / "a.db")
+        p2 = str(tmp_path / "b.db")
+        monkeypatch.setattr(dbconn, "DB_PATH", p1)
+        dbconn.init_db()
+        dbconn.init_db(dbconn.get_conn(p2))
+        c1 = deps.get_db()
+        c2 = deps.get_db(p2)
+        assert c1 is not c2
+        assert self._is_closed(c1)  # LRU: a thread holds one live conn — switching paths closes the other
+
+
 class TestSkillRepos:
     def test_upsert(self, conn):
         rows = [

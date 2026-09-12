@@ -27,6 +27,7 @@ from app.schemas import (
     TailorRequest,
 )
 from app.sse import sse
+from app import deps
 from app import events as events_hub
 from app import pipeline_apply
 from app import scheduler
@@ -50,7 +51,17 @@ log = logging.getLogger(__name__)
 
 # ── App setup ───────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Job Hunter")
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def _lifespan(_app):
+    # W2.1: release every shared SQLite handle on shutdown (SIGINT/SIGTERM via uvicorn).
+    yield
+    deps.close_all()
+
+
+app = FastAPI(title="Job Hunter", lifespan=_lifespan)
 
 STATIC_DIR = dbconn.BASE_DIR / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -130,18 +141,10 @@ def get_client() -> OJClient:
         )
     return _client
 
-_initialized_for: str | None = None
-
-
-def get_db() -> sqlite3.Connection:
-    """Per-request connection. Schema init happens once per process per DB
-    path (re-checked so a changed JOBS_DB_PATH re-initialises)."""
-    global _initialized_for
-    key = str(dbconn._resolve_db_path())
-    if _initialized_for != key:
-        _initialized_for = key
-        dbconn.init_db(dbconn.get_conn())
-    return dbconn.get_conn()
+# (W2.1) per-request connections come from app.deps.get_db — one shared
+# connection per (thread, db path), schema ensured once per process per path,
+# all closed on shutdown. Throwaway connections: dbconn.get_conn().
+get_db = deps.get_db
 
 
 # ── Health check ────────────────────────────────────────────────────────────

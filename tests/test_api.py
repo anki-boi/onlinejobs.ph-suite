@@ -11,29 +11,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from fastapi.testclient import TestClient
-from app.server import app
-
-
-@pytest.fixture
-def client(tmp_path, monkeypatch):
-    """Create a test client with a temp DB."""
-    db_path = str(tmp_path / "test.db")
-
-    # Monkeypatch the DB path at module level
-    import db.connection as dbconn
-    monkeypatch.setattr(dbconn, "DB_PATH", db_path)
-
-    # Create tables on the temp DB
-    from db.connection import init_db as _init_db
-    _init_db()
-
-    # Reset the server's client
-    from app import server as srv
-    monkeypatch.setattr(srv, "_client", None)
-
-    with TestClient(app) as c:
-        yield c
+from fastapi.testclient import TestClient  # noqa: F401  (shared `client` fixture now lives in conftest.py — W2.1)
 
 
 class TestStats:

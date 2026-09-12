@@ -122,8 +122,15 @@ def _resolve_db_path() -> Path:
     return BASE_DIR / path_str
 
 
-def get_db_path() -> Path:
-    """Public accessor for the resolved DB path."""
+def get_db_path(db_path: str | Path | None = None) -> Path:
+    """Public accessor for the resolved DB path.
+
+    An explicit `db_path` (if given) wins over env/config (W2.1). Relative
+    paths resolve against the project dir, matching `_resolve_db_path`.
+    """
+    if db_path is not None:
+        candidate = Path(db_path)
+        return candidate if candidate.is_absolute() else BASE_DIR / candidate
     return _resolve_db_path()
 
 
