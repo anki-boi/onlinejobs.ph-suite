@@ -46,6 +46,18 @@ def norm_title(title: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", (title or "").lower())
 
 
+def _salary_struct(salary: str | None) -> tuple:
+    """Structured salary fields for one salary text: (min, max, currency,
+    monthly_min_PHP, monthly_max_PHP). FX rate from config `fx_to_php`
+    (W4.1); no rate → monthly NULL, never approximated."""
+    from db import connection as dbconn
+    from scraper.salary import normalize_to_php, parse_salary
+    mn, mx, cur = parse_salary(salary)
+    fx = (dbconn.get_config().get("fx_to_php") or {})
+    pmn, pmx = normalize_to_php(mn, mx, cur, fx)
+    return (mn, mx, cur, pmn, pmx)
+
+
 def _find_repost_origin(conn, row_id: int, title: str, employer_id: int) -> int | None:
     """Earliest non-repost row with the same normalized title + employer.
     # ponytail: scans the employer's rows in Python (dozens per employer,
@@ -188,6 +200,14 @@ def get_jobs(
             # NULL-posted_date rows at the top of ASC while their cell shows a
             # recent date_found — which reads as a broken sort.
             order_by = f"date(COALESCE(NULLIF(posted_date, ''), date_found)) {order_sql}"
+        elif sort == "salary":
+            # W4.1: numeric, PHP-normalized. The IS-NULL flag sorts first, so
+            # no-salary rows (TBD/DOE/NULL) sink to the bottom in both
+            # directions instead of scattering by lexicographic order.
+            order_by = (
+                f"(salary_monthly_max IS NULL) ASC, salary_monthly_max {order_sql}, "
+                f"id ASC"
+            )  # id tie-break: equal salaries order deterministically
         else:
             order_by = f"{sort} {order_sql}"
     else:
@@ -233,6 +253,10 @@ def upsert_stub(
     """
     skills_str = ", ".join(skills) if skills else None
     date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if salary is not None:
+        s_min, s_max, s_cur, s_pmin, s_pmax = _salary_struct(salary)
+    else:
+        s_min = s_max = s_cur = s_pmin = s_pmax = None
 
     # Check by job_id first, then job_url
     existing = None
@@ -258,6 +282,18 @@ def upsert_stub(
             if val is not None:
                 updates.append(f"{col} = ?")
                 vals.append(val)
+        if title is not None and norm_title(title):
+            updates.append("norm_title = ?")
+            vals.append(norm_title(title))
+        if salary is not None:
+            # Only touch the structured fields when we actually got a value,
+            # or when the salary text genuinely changed ("$800/mo" → "TBD"
+            # invalidates the captured numbers). A parse failure on the
+            # same text must not clobber previously captured figures.
+            if s_pmin is not None or salary != (existing["salary"] if existing else None):
+                updates += ["salary_min = ?", "salary_max = ?", "salary_currency = ?",
+                            "salary_monthly_min = ?", "salary_monthly_max = ?"]
+                vals += [s_min, s_max, s_cur, s_pmin, s_pmax]
         if skills_str:
             updates.append("skills = ?")
             vals.append(skills_str)
@@ -278,12 +314,17 @@ def upsert_stub(
         """INSERT INTO jobs
            (job_id, job_url, title, work_type, company, posted_date,
             salary, location, hours_per_week, skills, search_keyword,
-            search_category, date_found, status)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'New')""",
+            search_category, date_found, status,
+            salary_min, salary_max, salary_currency,
+            salary_monthly_min, salary_monthly_max, norm_title)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'New',
+                   ?, ?, ?, ?, ?, ?)""",
         (
             job_id, job_url, title, work_type, company, posted_date,
             salary, location, hours, skills_str, search_keyword,
             search_category, date_now,
+            s_min, s_max, s_cur, s_pmin, s_pmax,
+            norm_title(title) if title else None,
         ),
     )
     conn.commit()
@@ -325,13 +366,23 @@ def enrich_job(
             fields[col] = val
     if skills is not None:
         fields["skills"] = ", ".join(skills)
+    if title is not None and norm_title(title):
+        fields["norm_title"] = norm_title(title)
 
-    # Structured salary (monthly min/max) follows the salary text
+    # Structured salary (raw min/max + currency + PHP-normalized monthly)
+    # follows the salary text
     if salary is not None:
-        from scraper.salary import parse_salary
-        mn, mx, _cur = parse_salary(salary)
-        fields["salary_min"] = mn
-        fields["salary_max"] = mx
+        s_min, s_max, s_cur, s_pmin, s_pmax = _salary_struct(salary)
+        old = conn.execute("SELECT salary FROM jobs WHERE id = ?", (row_id,)).fetchone()
+        old_text = old["salary"] if old is not None else None
+        # Same clobber guard as upsert_stub: a parse failure on unchanged
+        # text must not erase previously captured figures
+        if s_pmin is not None or salary != old_text:
+            fields["salary_min"] = s_min
+            fields["salary_max"] = s_max
+            fields["salary_currency"] = s_cur
+            fields["salary_monthly_min"] = s_pmin
+            fields["salary_monthly_max"] = s_pmax
 
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     vals = list(fields.values()) + [row_id]

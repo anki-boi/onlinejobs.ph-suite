@@ -34,6 +34,7 @@ Configuration lives in `config.json`, overlaid by the gitignored
 | `enrich_workers` | Parallel detail-page workers |
 | `enrich_interval_days` | "Check for updates" re-checks jobs older than this |
 | `backup_retention_days` | How many backups `scripts/backup.py` keeps (default 7 if omitted) |
+| `fx_to_php` (`.usd`) | FX rate used to normalize foreign-currency salaries to PHP (US$800/mo at 58 → ₱46,400). Override in `config.local.json` when the market moves; the rate actually used is recorded in the DB with a timestamp and shown with the normalized value |
 | `llm_base_url` / `llm_api_key` / `llm_model` | *(local overlay only)* any OpenAI-compatible endpoint for tailor + CV build |
 | `resume_sources` | *(local overlay only)* folders/files of resume PDFs/DOCX/TXTs the 1-page CV builder digests; defaults to `resumes/` |
 | `oj_cookies` | *(local overlay only)* session cookies passed to the site when provided; redacted in `/api/config` |

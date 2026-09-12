@@ -23,6 +23,11 @@ HOURS_PER_MONTH = 160
 DAYS_PER_MONTH = 30
 WEEKS_PER_MONTH = 4.33
 
+# Fallback rate when the config has no fx_to_php entry (owner can override in
+# config.local.json). Money is never approximated: a currency with no rate
+# normalizes to NULL, it does not guess.
+DEFAULT_FX_TO_PHP = {"USD": 58.0}
+
 
 def parse_salary(text: str | None) -> tuple[float | None, float | None, str | None]:
     """Return (min, max, currency) in monthly terms, or (None, None, None)."""
@@ -65,3 +70,26 @@ def parse_salary(text: str | None) -> tuple[float | None, float | None, str | No
         cur = "PHP"
 
     return (round(lo * factor, 1), round(hi * factor, 1), cur)
+
+
+def normalize_to_php(
+    mn: float | None, mx: float | None, cur: str | None,
+    fx: dict | None = None,
+) -> tuple[float | None, float | None]:
+    """Monthly (min, max) converted to PHP via an FX rate table.
+
+    `fx` maps currency → rate (case-insensitive keys); config `fx_to_php`
+    wins over DEFAULT_FX_TO_PHP. PHP is the identity rate. No rate for the
+    currency → (None, None): never approximate money.
+    """
+    if mn is None or mx is None or not cur:
+        return (None, None)
+    rates = {"PHP": 1.0, **DEFAULT_FX_TO_PHP, **(fx or {})}
+    rates = {k.upper(): v for k, v in rates.items()}
+    rate = rates.get(cur.upper())
+    # Config is a trust boundary: a hand-edited rate may not be numeric
+    if not isinstance(rate, (int, float)) or isinstance(rate, bool):
+        return (None, None)
+    if rate is None:
+        return (None, None)
+    return (round(mn * rate, 2), round(mx * rate, 2))

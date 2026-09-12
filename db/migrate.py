@@ -15,6 +15,8 @@ CLI:  python -m db.migrate --dry-run [--db PATH]
 
 import logging
 
+from db.migrations.v5_salary_currency import step as _v5
+
 log = logging.getLogger(__name__)
 
 # Old column → new column mappings (v1, pre-2.0 schema)
@@ -123,6 +125,7 @@ MIGRATIONS: dict[int, callable] = {
     2: _v2,
     3: _v3,
     4: _v4,
+    5: _v5,
 }
 
 
