@@ -26,7 +26,7 @@ from app.schemas import (
     StatusUpdate,
     TailorRequest,
 )
-from app.sse import sse
+from app.sse import hardened, sse
 from app import deps
 from app import events as events_hub
 from app import pipeline_apply
@@ -702,7 +702,7 @@ def run_pipeline(body: PipelineRequest):
         finally:
             scheduler.pipeline_lock.release()
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(hardened(generate(), "pipeline/run"), media_type="text/event-stream")
 
 
 @app.post("/api/pipeline/check")
@@ -758,7 +758,7 @@ def run_check(body: CheckRequest):
         finally:
             scheduler.pipeline_lock.release()
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(hardened(generate(), "pipeline/check"), media_type="text/event-stream")
 
 
 @app.post("/api/pipeline/stop")
