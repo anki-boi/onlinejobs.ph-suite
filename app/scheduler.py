@@ -78,7 +78,10 @@ def tick(client_factory=None) -> None:
         if client_factory is None:
             from app.server import get_client  # local import: server imports us
             client_factory = get_client
-        summary = run_once(client_factory(), conn, events.publish)
+        # W2.5: the live config (app/config.py) — enrich_workers /
+        # enrich_interval_days in config.local.json are honored, no restart.
+        cfg = dbconn.load_config()
+        summary = run_once(client_factory(), conn, events.publish, cfg)
         events.publish("schedule_done", summary)
     except Exception as exc:
         log.warning(f"auto-run failed: {exc}")
@@ -88,9 +91,12 @@ def tick(client_factory=None) -> None:
         pipeline_lock.release()
 
 
-def run_once(client, conn, publish) -> dict:
+def run_once(client, conn, publish, cfg: dict | None = None) -> dict:
     """One full auto-run: harvest all new jobs, enrich new + stale ones,
-    publish alerts. Returns a summary dict (also published by the caller)."""
+    publish alerts. Returns a summary dict (also published by the caller).
+    W2.5: cfg (the live config) supplies enrich_workers and
+    enrich_interval_days; None behaves as {} (defaults)."""
+    cfg = cfg or {}
     # ── Phase 1: harvest ────────────────────────────────────────────────
     existing = job_repo.get_existing_job_ids(conn)
     inserted = 0
@@ -124,13 +130,15 @@ def run_once(client, conn, publish) -> dict:
     # Brand-new rows have last_checked NULL, so the "needs enrichment" query
     # is exactly the union of fresh and stale.
     stale = job_repo.get_jobs_needing_enrichment(
-        conn, max_age_days=7, status_filter=None,
+        conn,
+        max_age_days=int(cfg.get("enrich_interval_days", 7) or 7),  # W2.5
+        status_filter=None,
         base_url=getattr(client, "base_url", None),
     )
     jobs_to_enrich = [(r["id"], r["job_url"]) for r in stale if r["job_url"]]
 
     enriched = closed = errors = 0
-    for event in enrich(client, jobs_to_enrich, workers=3):
+    for event in enrich(client, jobs_to_enrich, workers=int(cfg.get("enrich_workers", 3) or 3)):
         if event.type == "enrich_result":
             d = event.data
             if "error" in d:

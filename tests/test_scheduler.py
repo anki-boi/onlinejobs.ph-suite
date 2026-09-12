@@ -102,7 +102,7 @@ def test_run_once_follow_up_alert(conn):
 
 
 def test_tick_sets_last_and_next_run(conn, monkeypatch):
-    monkeypatch.setattr(scheduler, "run_once", lambda client, c, p: {"inserted": 0})
+    monkeypatch.setattr(scheduler, "run_once", lambda *a: {"inserted": 0})
     before = time.time()
     scheduler.tick(lambda: SchedulerClient())
     from db.repos import settings as settings_repo
@@ -170,3 +170,57 @@ def test_run_once_auto_applies_saved_keywords(conn):
     assert by_title["Python Developer (Jr)"] == 1
     assert by_title["Digital / Social Media Marketing Director"] == 0
     assert any(e == "alert" and d.get("type") == "keyword_filter" for e, d in events)
+
+
+class TestW25SchedulerHonorsConfig:
+    """W2.5: run_once takes the live config — enrich_workers and
+    enrich_interval_days from config.local.json are honored, no restart."""
+
+    def test_enrich_workers_from_cfg(self, conn, monkeypatch):
+        calls = {}
+        def fake_enrich(client, jobs, workers=3):
+            calls["workers"] = workers
+            return iter(())
+        monkeypatch.setattr(scheduler, "enrich", fake_enrich)
+        _events, publish = _record()
+        scheduler.run_once(SchedulerClient(), conn, publish, {"enrich_workers": 1})
+        assert calls["workers"] == 1
+
+    def test_enrich_interval_days_from_cfg(self, conn, monkeypatch):
+        from db.repos import jobs as job_repo
+        row_id, _ = job_repo.upsert_stub(conn, job_id=77, job_url="http://x/job/77", title="Stale")
+        conn.execute("UPDATE jobs SET last_checked = datetime('now', '-10 days') WHERE id = ?", (row_id,))
+        conn.commit()
+        seen = {}
+        def fake_enrich(client, jobs, workers=3):
+            seen["jobs"] = jobs
+            return iter(())
+        monkeypatch.setattr(scheduler, "enrich", fake_enrich)
+        _events, publish = _record()
+        # 10 days old: stale under the default 7d window…
+        scheduler.run_once(SchedulerClient(), conn, publish, {})
+        assert any(jid == row_id for jid, _u in seen["jobs"])
+        # …not under a 30d window
+        seen.clear()
+        scheduler.run_once(SchedulerClient(), conn, publish, {"enrich_interval_days": 30})
+        assert not any(jid == row_id for jid, _u in seen.get("jobs", []))
+
+    def test_tick_passes_live_config(self, conn, monkeypatch):
+        import db.connection as dbconn
+        got = {}
+        monkeypatch.setattr(scheduler, "run_once",
+                            lambda client, c, p, cfg=None: got.setdefault("cfg", cfg) or {})
+        monkeypatch.setattr(dbconn, "load_config", lambda: {"enrich_workers": 9})
+        scheduler.tick(lambda: SchedulerClient())
+        assert got["cfg"] == {"enrich_workers": 9}
+
+    def test_run_once_defaults_without_cfg(self, conn, monkeypatch):
+        # backward compat: 3-arg call still works (cfg defaults to {})
+        calls = {}
+        def fake_enrich(client, jobs, workers=3):
+            calls["workers"] = workers
+            return iter(())
+        monkeypatch.setattr(scheduler, "enrich", fake_enrich)
+        _events, publish = _record()
+        scheduler.run_once(SchedulerClient(), conn, publish)
+        assert calls["workers"] == 3
