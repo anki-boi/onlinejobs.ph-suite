@@ -21,17 +21,22 @@ resume** and fill in your name, email, phone and skills. Hit **Scrape jobs** (or
 the auto-run) to fill the table. Everything you add stays on this machine — your data and
 resume are local, only the code is in this repo.
 
-Configuration lives in `config.json`:
+Configuration lives in `config.json`, overlaid by the gitignored
+`config.local.json` (secrets, personal paths). Every key:
 
-| Key | Meaning |
+| Key (config.json) | Meaning |
 |---|---|
 | `base_url` / `api_url` | Site + skills API origin |
 | `db_path` | SQLite file (relative → resolved against the project dir) |
 | `request_delay` | Global throttle between outbound requests (seconds) |
 | `max_retries` | Retries on 429/5xx (exponential backoff; also respects server `Retry-After` headers) |
+| `user_agent` | User-Agent sent with every outbound request |
 | `enrich_workers` | Parallel detail-page workers |
 | `enrich_interval_days` | "Check for updates" re-checks jobs older than this |
-| `backup_retention_days` | How many backups to keep (default 7 if omitted) |
+| `backup_retention_days` | How many backups `scripts/backup.py` keeps (default 7 if omitted) |
+| `llm_base_url` / `llm_api_key` / `llm_model` | *(local overlay only)* any OpenAI-compatible endpoint for tailor + CV build |
+| `resume_sources` | *(local overlay only)* folders/files of resume PDFs/DOCX/TXTs the 1-page CV builder digests; defaults to `resumes/` |
+| `oj_cookies` | *(local overlay only)* session cookies passed to the site when provided; redacted in `/api/config` |
 
 ## Workflow
 
@@ -79,10 +84,15 @@ The **Auto-run** panel (sidebar) keeps the tracker fresh on its own:
   a desktop notification for every new-job batch, job closure, salary change, and
   follow-up that's due, delivered over the SSE stream (`/api/events`).
 
-The app starts at Windows logon (`JobHunter` scheduled task → `pythonw main.py`),
-and `JobHunter-Backup` runs `scripts/backup.py` daily at 03:00 — a `VACUUM INTO`
-snapshot into `backups/`, keeping the last N (from `config.json`
-`backup_retention_days`; default 7).
+The app can start at Windows logon: double-click `scripts/make_autostart.bat`
+to create the `JobHunter` scheduled task (`pythonw main.py`);
+`scripts/disable_autostart.bat` disables it again.
+
+**Backups** — `scripts/backup.py` takes a `VACUUM INTO` snapshot of `jobs.db`
+into `backups/` and prunes to the newest N (N = `backup_retention_days`,
+default 7). Run it on a schedule (on the owner's machine: a daily 03:00 task)
+or by hand: `python scripts/backup.py`. Restore = copy a snapshot back over
+`jobs.db` (see `docs/operations.md`).
 
 ## Data quality
 
@@ -96,8 +106,8 @@ snapshot into `backups/`, keeping the last N (from `config.json`
 
 ## Scrape curation, auto-applied filters, full reset
 - **Auto-run scope** — the scrape panel's keywords/categories/skills can be
-  saved as the auto-run scope (`POST /api/scrape-scope`). The 4-hour auto-run
-  then harvests only that scope; empty scope = scrape everything (default).
+  saved as the auto-run scope (`POST /api/scrape-scope`). The auto-run then
+  harvests only that scope; empty scope = scrape everything (default).
 - **Keyword rules persist + auto-apply** — `Apply auto-hide` saves your
   positive/negative lists server-side. Every auto-run re-applies them to fresh
   jobs automatically (desktop alert when it hides any). Inputs hydrate from
@@ -109,8 +119,10 @@ snapshot into `backups/`, keeping the last N (from `config.json`
 ## Resume tailoring + ATS
 
 - **Master resumes** (`resumes/masters.json`) — multiple named track profiles
-  in one file: `clinical-data-automation` (default), `healthcare`, `tech-data`,
-  seeded from the real Dropbox masters. Add/rename any via
+  in one file: `clinical-data-automation` (default), `healthcare`, `tech-data`.
+  A fresh clone's `masters.json` is seeded from the checked-in
+  `resumes/master.json` starter template (itself derived from the real
+  Dropbox masters). Add/rename any via
   `PUT /api/resume {"profile": name, "master": …}`.
 - **ATS score** — deterministic, not LLM (recruiter-side first passes are
   keyword + structure based, and a rule scorer can't hallucinate):
@@ -119,8 +131,8 @@ snapshot into `backups/`, keeping the last N (from `config.json`
   suggestions. `auto=1` scores every profile and returns the best fit —
   the job drawer uses this, so the right track always gets your resume.
 - **ATS filter** — toolbar toggle “ATS ≥ 50” hides every job your best-fitting
-  profile scores below 50 on (`GET /api/jobs?min_ats=50`). Your 2,800-row list
-  collapsed to the 37 jobs actually worth your time.
+  profile scores below 50 on (`GET /api/jobs?min_ats=50`). Collapses the full
+  list down to the jobs actually worth your time.
 - **Tailor** — `POST /api/resume/tailor {"job_id": N, "auto": 1}`: the LLM
   rewrites the best-fitting profile for that job — rewrite & reorder only,
   never invents facts, written in the owner's tone (short, no buzzwords);
@@ -145,6 +157,22 @@ snapshot into `backups/`, keeping the last N (from `config.json`
   in `config.local.json`: folders or files of your resume PDFs/DOCX/TXTs that
   the 1-page CV builder digests. Defaults to the project's `resumes/` folder.
 
+## HTTP API & SSE
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/pipeline/run` `{"keyword": …, "categories": …, "skills": …, "posted_since": …}` | Scrape; streams the run as SSE (`run_started`, `job`/`page`/`error`/`log`, `done`) |
+| `POST /api/pipeline/check` (optional `{"workers": …}`) | Re-check stale detail pages; same SSE stream |
+| `POST /api/pipeline/stop` `{"run_id": …}` | Stop that run (omitting `run_id` stops the active run) |
+| `GET /api/events` | Long-lived SSE alert stream: new-job batches, closures, salary changes, due follow-ups, structure changes, auto-run hidden-by-keywords |
+| `GET /api/schedule` / `POST /api/schedule` | Auto-run on/off + interval (1–24 h) + last run/status |
+| `GET /api/config` / `POST /api/config/reload` | Live config (secrets redacted) + reload without restart (W1.4) |
+| `GET /api/jobs`, `GET /api/jobs/export` | Query (search, status, salary, `min_ats`, date range) + full CSV |
+| resume endpoints | `PUT/GET /api/resume`, `GET /api/resume/ats`, `POST /api/resume/tailor`, `GET /api/resume/export`, `POST /api/resume/build` — see the Resume section above |
+| `GET /health` | Real health probe (see the Health check section below) |
+
+Full architecture: `docs/architecture.md`.
+
 ## Health check
 
 `GET /health` probes the database (short busy timeout) and the site (5 s
@@ -156,8 +184,8 @@ timeout), both in worker threads:
 - `503 {"status": "degraded", "site": "unreachable", ...}` — the site is
   down, so scraping can't run
 
-Useful for monitoring, Docker health checks, or Windows Task Manager
-restart scripts (a 503 means the restart script should act).
+Useful for monitoring, service managers, or Windows Task Manager restart
+scripts (a 503 means the restart script should act).
 
 ## Shutdown (Ctrl-C)
 
@@ -168,7 +196,7 @@ to end — **at most 10 seconds**, after which it forces the shutdown. A
 
 The process ends with a summary line — where the last run landed, e.g.
 `Last run: 2026-02-24 10:00:00 (stopped - partial results kept in jobs.db)`
-— and closes its database handles. Stopped runs are recorded as `stopped`
+— and every database handle is closed. Stopped runs are recorded as `stopped`
 (partial results kept), never `failed`; only a raised error is `failed`.
 
 ## Logging
@@ -180,31 +208,42 @@ of INFO+ messages streams to stderr when running interactively.
 
 | Path | Purpose |
 |---|---|
-| `main.py` | Entry point (DB init, skills refresh, uvicorn) |
-| `config.json` | Runtime configuration |
+| `main.py` | Entry point (DB init, skills refresh, uvicorn, graceful Ctrl-C shutdown) |
+| `config.json` / `config.local.json.example` | Runtime configuration / template for the local overlay |
 | `app/server.py` | FastAPI app: REST + SSE endpoints |
-| `app/schemas.py` / `app/sse.py` | Pydantic models / SSE helpers |
-| `db/connection.py` | Schema, migrations (version-gated), `get_db()` |
-| `db/migrate.py` | One-time data repairs run on version bumps |
+| `app/schemas.py` / `app/sse.py` | Pydantic models / SSE helpers (hardened streams) |
+| `app/config.py` | Live config: merged read, `reload()`, redaction (W1.4) |
+| `app/deps.py` | Per-thread DB connection registry, closed on shutdown (W2.1) |
+| `app/scheduler.py` | Auto-run daemon thread: per-run stop tokens, run registry, status recording (W2.5/W2.8) |
+| `db/connection.py` | Schema, `get_conn()`/`init_db()`, config/DB-path accessors for scripts |
+| `db/migrate.py` | Versioned migration registry (`user_version`-gated steps) + `python -m db.migrate --dry-run` (W2.7) |
 | `db/repos/jobs.py` | Job CRUD + query + status history |
 | `db/repos/skills.py` | Skill taxonomy store |
-| `scraper/client.py` | HTTP client: throttle, backoff, stop signal, respects `Retry-After` headers |
+| `scraper/client.py` | HTTP client: throttle, backoff, per-run stop token, `Retry-After` handling |
+| `scraper/salary.py` | Free-text salary → monthly (min, max, currency); hourly ×160, weekly ×4.33, daily ×30, annual ÷12 |
 | `scraper/parsers.py` | HTML → structured data (search list, detail, closed detection) |
 | `scraper/pipeline.py` | `harvest()` / `enrich()` event generators |
 | `scraper/skills.py` | Skills API client |
 | `resumes/{schema,ats,tailor,render}.py` | Multi-profile master JSON, deterministic ATS scorer, LLM tailor, docx/txt render |
+| `resumes/{digest,yamlcv}.py` | Source digest + RenderCV Harvard-template one-page CV builder |
 | `resumes/master.json` | Starter template (edit in the UI) — a fresh clone starts from this |
 | `resumes/masters.json` | Your named track profiles (gitignored, local-only) — created by editing the resume in the UI |
-| `config.local.json.example` | Template for the (gitignored) `config.local.json` LLM settings |
+| `scripts/backup.py` | `VACUUM INTO` backup + retention pruning (run on a schedule or by hand) |
+| `scripts/make_autostart.bat` / `disable_autostart.bat` | Create/disable the Windows `JobHunter` logon task |
+| `tools/gate.sh` | One-command gate: ruff + full pytest + personal-path check + README truth check |
+| `tools/check_readme.py` | README truthfulness check (every config key documented; no stale counts) (W1.6) |
 | `install.bat` / `run.bat` | Windows double-click setup + start (creates a venv) |
 | `static/index.html` / `static/app.js` / `static/style.css` | Dashboard UI |
+| `docs/` | Architecture, operations (backup/restore/autostart), scraping politeness & ToS |
 | `tests/` | pytest suite (DB, parsers, pipeline, API) |
 
 ## Development
 
 ```bash
 pip install -r requirements-dev.txt   # pytest + ruff (test/lint gate)
-python -m pytest tests/ -q      # full suite, no network
+sh tools/gate.sh                     # the full gate run before every push
+python -m pytest tests/ -q           # full suite, no network
+python -m db.migrate --dry-run       # show which migration steps a DB would run
 JOBS_DB_PATH=/tmp/sandbox.db python main.py --port 8372   # run against a DB copy
 ```
 

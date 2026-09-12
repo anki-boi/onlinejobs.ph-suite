@@ -1,6 +1,6 @@
 #!/bin/sh
-# One-command check gate (W1.1/W2.4). W1.3 extends this with smoke_e2e.sh and
-# check_fixtures.sh and installs the pre-push hook that calls it.
+# One-command check gate: ruff + full pytest + personal-path check +
+# README truthfulness (W1.6). Refused by the pre-push hook (.githooks).
 set -e
 cd "$(dirname "$0")/.."
 
@@ -14,5 +14,8 @@ if git grep -nF -e 'Dropbox' -e 'C:\Users\' -- '*.py'; then
   echo "gate: FAIL - personal machine path in tracked .py source" >&2
   exit 1
 fi
+
+# W1.6: README truthfulness (config keys documented; no stale counts)
+python tools/check_readme.py
 
 echo "gate: PASS"

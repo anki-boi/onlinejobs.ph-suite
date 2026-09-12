@@ -440,7 +440,7 @@ def resume_tailor(body: TailorRequest):
     """LLM-tailored resume for one job + its ATS score. 503 if no LLM configured."""
     llm = LLMClient.from_config(_cfg)
     if llm is None:
-        raise HTTPException(503, "No LLM configured — add llm_base_url/llm_model to config.json")
+        raise HTTPException(503, "No LLM configured - add llm_base_url/llm_model to config.local.json")
     conn = get_db()
     row = job_repo.get_job(conn, body.job_id)
     if not row:
@@ -481,7 +481,7 @@ def resume_export(job_id: int, fmt: str = "docx", tailored: int = 0, profile: st
     if tailored:
         llm = LLMClient.from_config(_cfg)
         if llm is None:
-            raise HTTPException(503, "No LLM configured — add llm_base_url/llm_model to config.json")
+            raise HTTPException(503, "No LLM configured - add llm_base_url/llm_model to config.local.json")
         m = tailor(m, jd, llm)
     if fmt == "txt":
         body, ctype, ext = resume_render.to_txt(m), "text/plain; charset=utf-8", "txt"
