@@ -494,8 +494,7 @@ def resume_build(body: TailorRequest):
     except KeyError as e:
         raise HTTPException(404, f"Unknown profile {e.args[0]!r}")
     identity = resume_render.to_txt(doc)
-    sources = _cfg.get("resume_sources") or [
-        r"C:\Users\PC\Dropbox\Resumes", str(BASE_RESUMES)]
+    sources = _cfg.get("resume_sources") or [str(BASE_RESUMES)]  # W2.4: repo dir, not a personal path
     corpus = resume_digest.digest(sources)
     if corpus["chars"] < 200:
         raise HTTPException(400, "No readable resume source files found (set resume_sources in config.local.json)")
