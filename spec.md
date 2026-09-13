@@ -313,7 +313,11 @@ Effort is in focus-hours for one delegated agent. `‖` = parallel-safe against 
 
 | ID | Task | Files | Acceptance | Eff |
 |---|---|---|---|---|
-| W5.1 | Split `app/server.py` into `app/routers/{jobs,pipeline,resume,settings,events,skills}.py` + `services/`; **no behaviour change**, tests untouched and green | `app/*` | all 192 tests still pass unchanged | 6 |
+| W5.1 | Route groups → `app/routers/`; server.py = composition root | ✅ e4f3916 |
+| W5.2 | Uniform error envelope `{"error":{code,message,detail}}` | ✅ e4f3916 |
+| W5.3 | Pagination contract on GET /api/jobs | ✅ 3481803 |
+| W5.4 | ETag/304 on GET /api/jobs; idempotent pipeline runs | ✅ 39cda86 |
+| W5.5 | OpenAPI: per-group tags + route summaries | ✅ a1c8a6b |
 | W5.2 | Uniform error envelope `{error:{code,message,detail}}`, exception handlers for `ValueError`/`sqlite3.OperationalError`/`ScrapeStopped`, and `422` validation messages that name the field | `app/*` | golden tests for each error class | 4 |
 | W5.3 | Pagination contract: `page`, `per_page` (cap 500), `total`, `next_cursor`; reject oversize `per_page` with 400 instead of silently accepting 99999 | `app/*`, UI | `per_page=99999` → 400 | 3 |
 | W5.4 | Idempotency + ETag for GET lists; `If-None-Match` → 304; `POST /api/pipeline/run` returns a `run_id` usable for status polling without SSE | `app/*` | 304 on repeat; poll endpoint returns the same run | 4 |
@@ -327,7 +331,9 @@ Effort is in focus-hours for one delegated agent. `‖` = parallel-safe against 
 
 | ID | Task | Files | Acceptance | Eff |
 |---|---|---|---|---|
-| W6.1 | Split `app.js` into ES modules (`api.js`, `table.js`, `filters.js`, `resume.js`, `sse.js`, `boot.js`); keep `<script type="module">`, no build step | `static/js/*` | app boots identically; each module < 300 lines | 5 |
+| W6.1 | `app.js` → ES modules (`core/stats/jobs/resume/run/filters` + entry) | ✅ 0671d75 |
+| W6.2 | Server-side pagination UI (pager, per_page 50) | ✅ 0671d75 |
+| W6.3 | Virtual scroll for >80-row pages (spacer rows) | ✅ 0671d75 |
 | W6.2 | Server-side pagination + virtual scroll; `per_page` 100; sticky header; row count from `total`, not DOM | `static/js/table.js`, `app/routers/jobs.py` | §2.7 acceptance; 5,000 rows first paint < 1.5s | 6 |
 | W6.3 | Replace positional selectors with `data-field` attributes; remove every non-escaped `innerHTML`; add a grep gate | `static/js/*` | `grep -n "innerHTML" static/js` shows only static template strings | 3 |
 | W6.4 | Accessibility: `<th scope>`, `aria-sort`, `aria-live` on the log/toast, focus trap + `Esc` in the detail drawer, real `<label for>`, 4.5:1 contrast check | `static/*` | axe-core scan: 0 critical; full keyboard-only job triage possible | 5 |
