@@ -26,6 +26,18 @@ done
 
 # W1.6: README truthfulness (config keys documented; no stale counts)
 # W3.1: live drift check (exit 0 with warn when offline; exit 1 on markup drift)
+# W6.1: every frontend module must parse as an ES module
+if command -v node >/dev/null; then
+  for f in static/app.js static/js/*.js; do
+    cp "$f" tools/_gate.mjs 2>/dev/null || true
+    # cp to tools/ is fine (local disk); /tmp is not
+    if ! node --check tools/_gate.mjs; then echo "JS syntax check failed: $f"; exit 1; fi
+  done
+  rm -f tools/_gate.mjs
+else
+  echo "node not found — skipping JS syntax check"
+fi
+
 python tools/check_fixtures.py
 python tools/check_readme.py
 

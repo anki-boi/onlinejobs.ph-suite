@@ -528,3 +528,9 @@ th.sorted-desc .th-label::after { content: '▼'; }
   border-radius: 6px; padding: 3px 10px; cursor: pointer;
 }
 .config-banner button:hover { background: #f3e3ac; }
+
+/* W6.2 pager + W6.3 virtual-scroll spacers */
+.pager { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; font-size: 13px; }
+.pager button { padding: 2px 8px; border: 1px solid var(--border, #444); border-radius: 4px; background: var(--bg2, #222); color: inherit; cursor: pointer; }
+.pager button:disabled { opacity: .4; cursor: default; }
+tr.vs-spacer td { padding: 0; }
