@@ -8,11 +8,13 @@ from scraper.skills import fetch_skills, skills_to_db_rows
 from db.repos import skills as skill_repo
 from app.server import get_client, get_db
 
-router = APIRouter()
+router = APIRouter(tags=['Skills'])
 
 
 @router.get("/api/skills")
 def list_skills(search: str | None = None):
+
+    """List known skill tags."""
     conn = get_db()
     if search:
         rows = skill_repo.search_skills(conn, search)
@@ -23,12 +25,16 @@ def list_skills(search: str | None = None):
 
 @router.get("/api/skills/categories")
 def skill_categories():
+
+    """Skill categories as shown on OJ.ph."""
     conn = get_db()
     return skill_repo.get_categories(conn)
 
 
 @router.post("/api/skills/refresh")
 def refresh_skills():
+
+    """Re-fetch the skills list from OJ.ph."""
     client = get_client()
     try:
         skills = fetch_skills(client, keyword="")

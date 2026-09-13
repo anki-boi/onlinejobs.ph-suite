@@ -15,7 +15,7 @@ from app.schemas import FollowUpUpdate, NotesUpdate, StatusUpdate
 from app import server as srv
 from db.repos import jobs as job_repo
 
-router = APIRouter()
+router = APIRouter(tags=['Jobs'])
 
 _EXPORT_COLS = ["id", "job_id", "title", "company", "description", "salary",
                 "location", "hours_per_week", "work_type", "posted_date",
@@ -24,7 +24,8 @@ _EXPORT_COLS = ["id", "job_id", "title", "company", "description", "salary",
 
 @router.get("/api/jobs/export")
 def export_jobs():
-    """Stream the full job set as CSV. No pagination — one complete dump."""
+
+    """Full CSV export of all saved jobs (all statuses)."""
     conn = srv.get_db()
     rows = conn.execute(f"SELECT {','.join(_EXPORT_COLS)} FROM jobs ORDER BY id").fetchall()
 
@@ -69,6 +70,9 @@ def list_jobs(request: Request,
     salary_currency: str | None = None,        # comma-separated, e.g. "USD,PHP"
     min_ats: int = 0,  # hide jobs whose best-profile ATS score is below this
 ):
+
+    """List saved jobs with filters. Paginated: {items, page, per_page, total, next_cursor}; per_page max 500 (bigger is 400); repeat GETs with If-None-Match get 304 until data or query changes."""
+
     # W5.3: per_page is capped — one page must stay small enough to render.
     if per_page > 500:
         raise HTTPException(400, "per_page is limited to 500 (use /api/jobs/export for full dumps)")
@@ -117,6 +121,9 @@ def list_jobs(request: Request,
 
 @router.get("/api/jobs/{job_pk}")
 def get_job(job_pk: int):
+
+    """Full detail of one saved job."""
+
     conn = srv.get_db()
     row = job_repo.get_job(conn, job_pk)
     if not row:
@@ -128,6 +135,8 @@ def get_job(job_pk: int):
 
 @router.patch("/api/jobs/{job_pk}/status")
 def update_status(job_pk: int, body: StatusUpdate):
+
+    """Change a job pipeline status (Applied, Interviewing, ...)."""
     conn = srv.get_db()
     if not job_repo.get_job(conn, job_pk):
         raise HTTPException(404, "Job not found")
@@ -140,6 +149,8 @@ def update_status(job_pk: int, body: StatusUpdate):
 
 @router.patch("/api/jobs/{job_pk}/notes")
 def update_notes(job_pk: int, body: NotesUpdate):
+
+    """Set a job note (LLM-extracted or free text)."""
     conn = srv.get_db()
     job_repo.update_notes(conn, job_pk, body.notes)
     return {"ok": True}
@@ -147,6 +158,8 @@ def update_notes(job_pk: int, body: NotesUpdate):
 
 @router.patch("/api/jobs/{job_pk}/follow-up")
 def update_follow_up(job_pk: int, body: FollowUpUpdate):
+
+    """Set the follow-up date for a job."""
     conn = srv.get_db()
     job_repo.update_follow_up(conn, job_pk, body.follow_up)
     return {"ok": True}
@@ -154,13 +167,16 @@ def update_follow_up(job_pk: int, body: FollowUpUpdate):
 
 @router.get("/api/stats")
 def stats():
+
+    """Dashboard counters: totals, follow-ups due, scrape health."""
+
     return job_repo.get_stats(srv.get_db())
 
 
 @router.post("/api/jobs/reset")
 def reset_jobs():
-    """Delete every job + status history. Keeps: saved keyword rules, scrape
-    scope, scheduler settings, resume masters, backups."""
+
+    """Delete all saved jobs (and their history / ATS scores)."""
     conn = srv.get_db()
     try:
         conn.execute("DELETE FROM job_history")  # also FK-cascades from jobs

@@ -12,7 +12,7 @@ from app import server as srv
 from db.repos import settings as settings_repo
 from app.services import keywords as kw
 
-router = APIRouter()
+router = APIRouter(tags=['Settings'])
 
 
 @router.get("/api/config")
@@ -36,6 +36,8 @@ def reload_config():
 
 @router.get("/api/schedule")
 def get_schedule():
+
+    """Auto-run schedule state (enabled, interval, next run)."""
     conn = srv.get_db()
     return {
         "enabled": settings_repo.get(conn, "auto_run_enabled", "1") == "1",
@@ -54,6 +56,8 @@ def get_schedule():
 
 @router.post("/api/schedule")
 def set_schedule(body: ScheduleUpdate):
+
+    """Update the auto-run schedule (enable / interval / next run)."""
     conn = srv.get_db()
     if body.enabled is not None:
         settings_repo.set(conn, "auto_run_enabled", "1" if body.enabled else "0")
@@ -127,6 +131,8 @@ def get_scrape_scope():
 
 @router.post("/api/scrape-scope")
 def save_scrape_scope(body: ScrapeScope):
+
+    """Save the scrape scope used by auto-runs."""
     conn = srv.get_db()
     settings_repo.set(conn, "scrape_keyword", (body.keyword or "").strip())
     settings_repo.set(conn, "scrape_categories", json.dumps(body.categories or []))

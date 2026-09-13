@@ -13,11 +13,14 @@ from app.schemas import ResumeUpdate, TailorRequest
 from app import server as srv
 from db.repos import jobs as job_repo
 
-router = APIRouter()
+router = APIRouter(tags=['Resume'])
 
 
 @router.get("/api/resume")
 def get_resume(profile: str = ""):
+
+    """Current resume text plus profile metadata."""
+
     try:
         return srv.resume_schema.get_profile(srv._masters(), profile)
     except KeyError as e:
@@ -26,12 +29,16 @@ def get_resume(profile: str = ""):
 
 @router.get("/api/resume/profiles")
 def get_resume_profiles():
+
+    """List saved resume profiles."""
     d = srv._masters()
     return {"default": d.get("default"), "profiles": list((d.get("profiles") or {}).keys())}
 
 
 @router.put("/api/resume")
 def put_resume(body: ResumeUpdate):
+
+    """Save resume text (create or update a profile)."""
     errs = srv.validate(body.master)
     if errs:
         raise HTTPException(400, "; ".join(errs))
@@ -44,7 +51,8 @@ def put_resume(body: ResumeUpdate):
 
 @router.get("/api/resume/ats")
 def resume_ats(job_id: int, profile: str = "", auto: int = 0):
-    """Deterministic ATS-style score vs one job. auto=1 → best-fitting profile."""
+
+    """ATS pre-screen score for the resume against one job."""
     conn = srv.get_db()
     row = job_repo.get_job(conn, job_id)
     if not row:
@@ -63,7 +71,8 @@ def resume_ats(job_id: int, profile: str = "", auto: int = 0):
 
 @router.post("/api/resume/tailor")
 def resume_tailor(body: TailorRequest):
-    """LLM-tailored resume for one job + its ATS score. 503 if no LLM configured."""
+
+    """LLM-tailor the resume for one job (SSE stream of progress)."""
     llm = srv.LLMClient.from_config(srv._cfg)
     if llm is None:
         raise HTTPException(503, "No LLM configured - add llm_base_url/llm_model to config.local.json")
@@ -90,6 +99,8 @@ def resume_tailor(body: TailorRequest):
 
 @router.get("/api/resume/export")
 def resume_export(job_id: int, fmt: str = "docx", tailored: int = 0, profile: str = "", auto: int = 0):
+
+    """Render the resume as a document for download."""
     conn = srv.get_db()
     row = job_repo.get_job(conn, job_id)
     if not row:
@@ -121,7 +132,8 @@ def resume_export(job_id: int, fmt: str = "docx", tailored: int = 0, profile: st
 
 @router.get("/api/resume/yamlcv-status")
 def yamlcv_status():
-    """Whether the rendercv toolchain is installed (gates the UI button)."""
+
+    """Status of the yamlcv tooling."""
     try:
         from resumes import yamlcv as resume_yamlcv
     except ImportError:
@@ -131,6 +143,8 @@ def yamlcv_status():
 
 @router.get("/api/resume/built")
 def built_list():
+
+    """List built resume files."""
     if not srv.BUILT_DIR.is_dir():
         return {"items": []}
     items = []
@@ -147,6 +161,8 @@ def built_list():
 
 @router.get("/api/resume/built/{name}")
 def built_file(name: str):
+
+    """Download one built resume file."""
     if "/" in name or "\\" in name or name.startswith("."):
         raise HTTPException(400, "bad name")
     f = srv.BUILT_DIR / name
@@ -158,8 +174,8 @@ def built_file(name: str):
 
 @router.post("/api/resume/build")
 def resume_build(body: TailorRequest):
-    """Digest resume sources + LLM draft + render-loop until exactly 1 page.
-    503 if no LLM or no rendercv toolchain; 422 if the loop can't fit a page."""
+
+    """Build the current resume into a file."""
     try:
         from resumes import digest as resume_digest
         from resumes import yamlcv as resume_yamlcv

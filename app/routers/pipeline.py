@@ -13,7 +13,7 @@ from db.repos import jobs as job_repo
 from db.repos import settings as settings_repo
 from app import server as srv
 
-router = APIRouter()
+router = APIRouter(tags=['Pipeline'])
 
 
 def _acquire_pipeline(conn, run_id, token, client, scope=None):
@@ -37,16 +37,16 @@ def _acquire_pipeline(conn, run_id, token, client, scope=None):
     scheduler.begin_run(run_id, token, client, scope=scope)
     return [], True
 
-# /api/schedule lives in app/routers/settings.py
 
 
 @router.post("/api/pipeline/run")
 def run_pipeline(body: PipelineRequest):
+
+    """Start a scrape+enrich run as an SSE stream. A POST with the same scope as the run in progress returns that run_id (already_running) instead of busy."""
     """Full pipeline: harvest → enrich. Streams SSE."""
     conn = srv.get_db()
     client = srv.get_client()
 
-    # W2.8: per-run stop token; the client is pointed at it only while this run owns the lock.
     run_id = scheduler.new_run_id()
     token = StopToken()
 
@@ -173,6 +173,8 @@ def run_pipeline(body: PipelineRequest):
 
 @router.post("/api/pipeline/check")
 def run_check(body: CheckRequest):
+
+    """Re-check the posting status of existing jobs (SSE stream)."""
     """Re-check existing jobs."""
     conn = srv.get_db()
     client = srv.get_client()
@@ -239,6 +241,8 @@ def run_check(body: CheckRequest):
 
 @router.post("/api/pipeline/stop")
 def stop_pipeline(body: StopRequest = None):
+
+    """Stop the active run, or the run_id named in the body."""
     """W2.8: stop one run (a run_id, or the active run when omitted)."""
     run_id = body.run_id if body is not None else None
     stopped = scheduler.stop_run(run_id)

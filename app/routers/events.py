@@ -8,7 +8,7 @@ from fastapi.routing import APIRouter
 from app.sse import sse
 from app import events as events_hub
 
-router = APIRouter()
+router = APIRouter(tags=['Events'])
 
 
 @router.get("/api/events")
