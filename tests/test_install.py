@@ -69,4 +69,4 @@ def test_resume_build_without_pymupdf(no_pymupdf):
     with TestClient(srv.app) as c:
         res = c.post("/api/resume/build", json={"job_id": 1, "profile": "p"})
     assert res.status_code == 503
-    assert "pymupdf" in res.json()["detail"]
+    assert "pymupdf" in res.json()["error"]["message"]

@@ -95,7 +95,7 @@ def test_build_503_without_toolchain(client, monkeypatch):
     _seed_job(client)
     monkeypatch.setattr(resume_yamlcv, "available", lambda: False)
     r = client.post("/api/resume/build", json={"job_id": 1})
-    assert r.status_code == 503 and "rendercv" in r.json()["detail"]
+    assert r.status_code == 503 and "rendercv" in r.json()["error"]["message"]
 
 
 def test_build_422_when_loop_fails(client, monkeypatch):
@@ -115,7 +115,7 @@ def test_build_422_when_loop_fails(client, monkeypatch):
                 "pdf": None, "history": [], "error": "still over one page after max rounds"}
     monkeypatch.setattr(resume_yamlcv, "build_one_pager", fail)
     r = client.post("/api/resume/build", json={"job_id": 1})
-    assert r.status_code == 422 and "one page" in r.json()["detail"]
+    assert r.status_code == 422 and "one page" in r.json()["error"]["message"]
 
 
 def test_built_list_empty_and_name_traversal_blocked(client):

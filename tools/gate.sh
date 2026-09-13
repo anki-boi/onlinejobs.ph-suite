@@ -15,6 +15,15 @@ if git grep -nF -e 'Dropbox' -e 'C:\Users\' -- '*.py'; then
   exit 1
 fi
 
+# W5.1: no route module over 250 lines (split when one grows past it).
+for f in app/routers/*.py; do
+  n=$(wc -l < "$f")
+  if [ "$n" -gt 250 ]; then
+    echo "gate: FAIL - $f is $n lines (max 250)" >&2
+    exit 1
+  fi
+done
+
 # W1.6: README truthfulness (config keys documented; no stale counts)
 # W3.1: live drift check (exit 0 with warn when offline; exit 1 on markup drift)
 python tools/check_fixtures.py

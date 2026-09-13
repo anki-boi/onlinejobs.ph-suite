@@ -1,20 +1,14 @@
-"""app/routers/pipeline.py — pipeline run/check/stop (SSE streams), keyword
-auto-hide rules, auto-run schedule, scrape scope. (W5.1 split; no behaviour
-change.)"""
+"""app/routers/pipeline.py — pipeline run/check/stop (SSE streams). (W5.1
+split; no behaviour change.) Keyword rules, auto-run schedule and scrape
+scope live in app/routers/settings.py."""
 
-import json
-import sqlite3
-
-from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRouter
 from scraper.client import StopToken
-from app.schemas import (CheckRequest, KeywordFilter, PipelineRequest,
-                         ScrapeScope, StopRequest)
+from app.schemas import CheckRequest, PipelineRequest, StopRequest
 from app.sse import hardened, sse
 from app import scheduler
 from app import pipeline_apply
-from app.services import keywords as kw
 from db.repos import jobs as job_repo
 from db.repos import settings as settings_repo
 from app import server as srv
@@ -30,9 +24,7 @@ def run_pipeline(body: PipelineRequest):
     conn = srv.get_db()
     client = srv.get_client()
 
-    # W2.8: this run's own stop token (the shared client is persistent, but
-    # stopping is per run). The client is pointed at it only while this run
-    # owns the pipeline lock, inside generate().
+    # W2.8: per-run stop token; the client is pointed at it only while this run owns the lock.
     run_id = scheduler.new_run_id()
     token = StopToken()
 
@@ -57,10 +49,7 @@ def run_pipeline(body: PipelineRequest):
         if unresolved:
             try:
                 api_skills = srv.fetch_skills(client, keyword="")
-                api_lookup = {
-                    (s.get("name") or "").lower(): s.get("id")
-                    for s in api_skills
-                }
+                api_lookup = {(s.get("name") or "").lower(): s.get("id") for s in api_skills}
                 for name in unresolved:
                     oid = api_lookup.get(name.lower())
                     if oid is None:  # fuzzy: name appears in a known skill name
@@ -80,8 +69,7 @@ def run_pipeline(body: PipelineRequest):
             yield sse("error", "Another run is in progress (auto-run or another tab) — try again shortly")
             yield sse("done", "busy")
             return
-        # W2.6: cross-process guard — a second Job Hunter instance sharing this
-        # DB would otherwise fire a second scrape at the site.
+        # W2.6: cross-process guard — a second instance sharing this DB would double-scrape.
         try:
             ok, msg = srv._claim_run_or_busy(conn)
         except Exception as exc:  # e.g. a stale implicit transaction
@@ -94,19 +82,13 @@ def run_pipeline(body: PipelineRequest):
             yield sse("done", "busy")
             scheduler.pipeline_lock.release()
             return
-        # W2.8: this run owns the pipeline now — point the shared client at
-        # this run's token, so Stop reaches exactly this run.
+        # W2.8: this run owns the pipeline now — Stop reaches exactly this run.
         scheduler.begin_run(run_id, token, client)
         try:
             new_job_ids: list[int] = []
-            for event in srv.harvest(
-                client,
-                keyword=keyword,
-                categories=categories or None,
-                skill_ids=skill_ids or None,
-                posted_since=posted_since,
-                existing_ids=existing_ids,
-            ):
+            for event in srv.harvest(client, keyword=keyword, categories=categories or None,
+                                     skill_ids=skill_ids or None, posted_since=posted_since,
+                                     existing_ids=existing_ids):
                 settings_repo.heartbeat_instance_lock(conn)
                 if event.type == "log":
                     yield sse("log", event.message)
@@ -201,8 +183,7 @@ def run_check(body: CheckRequest):
 
     jobs_to_check = [(r["id"], r["job_url"]) for r in rows if r["job_url"]]
 
-    # Only re-check jobs on the configured site. Stray rows (test fixtures with
-    # fake domains like test.com) would otherwise burn retries and error every run.
+    # Only re-check jobs on the configured site; stray fixture rows (test.com) would burn retries.
     base = (srv._cfg.get("base_url") or "").strip()
     if base:
         prefix = base.rstrip('/') + '/'
@@ -213,8 +194,7 @@ def run_check(body: CheckRequest):
             yield sse("error", "Another run is in progress (auto-run or another tab) — try again shortly")
             yield sse("done", "busy")
             return
-        # W2.6: cross-process guard (same as /api/pipeline/run)
-        try:
+        try:  # W2.6: cross-process guard (same as /api/pipeline/run)
             ok, msg = srv._claim_run_or_busy(conn)
         except Exception as exc:
             scheduler.pipeline_lock.release()
@@ -226,8 +206,7 @@ def run_check(body: CheckRequest):
             yield sse("done", "busy")
             scheduler.pipeline_lock.release()
             return
-        # W2.8: this run owns the pipeline now — point the shared client at
-        # this run's token, so Stop reaches exactly this run.
+        # W2.8: this run owns the pipeline now — Stop reaches exactly this run.
         scheduler.begin_run(run_id, token, client)
         try:
             if not jobs_to_check:
@@ -264,80 +243,8 @@ def run_check(body: CheckRequest):
 
 @router.post("/api/pipeline/stop")
 def stop_pipeline(body: StopRequest = None):
-    """W2.8: stop one run. With a run_id, only that run's stop flag is
-    flipped; without, the server's active run (backward-compatible)."""
+    """W2.8: stop one run (a run_id, or the active run when omitted)."""
     run_id = body.run_id if body is not None else None
     stopped = scheduler.stop_run(run_id)
     return {"ok": True,
             "message": "Stop signal sent" if stopped else "No active run to stop"}
-
-
-@router.post("/api/keywords/apply")
-def apply_keywords(body: KeywordFilter):
-    """
-    Apply positive/negative keyword filters to all jobs.
-    Positive: hide jobs that DON'T match any positive keyword.
-    Negative: hide jobs that DO match any negative keyword.
-
-    Reversible — see app/services/keywords.py for the full rule set.
-    """
-    positive = [k.strip() for k in body.positive if k.strip()]
-    negative = [k.strip() for k in body.negative if k.strip()]
-    # Note: applying with NO keywords is not a no-op — it means "no rule hides
-    # anything", so every filter-hidden job is restored. That's the
-    # "I changed my mind" path; the restore flag forces the same outcome
-    # even when keywords are present.
-
-    conn = srv.get_db()
-    try:
-        # Persist the rules: the auto-run re-applies them after every harvest,
-        # and the UI hydrates its inputs from GET /api/keywords on load.
-        settings_repo.set(conn, "positive_keywords", json.dumps(positive))
-        settings_repo.set(conn, "negative_keywords", json.dumps(negative))
-        neg_hidden, pos_hidden, restored = kw.apply_keyword_filters(
-            conn, positive, negative, restore_all=body.restore
-        )
-    except sqlite3.OperationalError as exc:
-        conn.rollback()
-        raise HTTPException(
-            503, f"Database busy ({exc}) — the pipeline may be writing; try again in a moment"
-        )
-    return {
-        "hidden_by_negative": neg_hidden,
-        "hidden_by_positive": pos_hidden,
-        "total_hidden": neg_hidden + pos_hidden,
-        "restored": restored,
-        "still_filter_hidden": kw.filter_hidden_count(conn),
-    }
-
-
-@router.get("/api/keywords")
-def get_keywords():
-    """Saved auto-hide rules (for UI hydration) + how many jobs they hide."""
-    conn = srv.get_db()
-    return {
-        "positive": json.loads(settings_repo.get(conn, "positive_keywords", "[]") or "[]"),
-        "negative": json.loads(settings_repo.get(conn, "negative_keywords", "[]") or "[]"),
-        "still_filter_hidden": kw.filter_hidden_count(conn),
-    }
-
-
-@router.get("/api/scrape-scope")
-def get_scrape_scope():
-    """What the auto-run harvests. All empty = scrape everything."""
-    conn = srv.get_db()
-    return {
-        "keyword": settings_repo.get(conn, "scrape_keyword", "") or "",
-        "categories": json.loads(settings_repo.get(conn, "scrape_categories", "[]") or "[]"),
-        "skills": json.loads(settings_repo.get(conn, "scrape_skills", "[]") or "[]"),
-    }
-
-
-@router.post("/api/scrape-scope")
-def save_scrape_scope(body: ScrapeScope):
-    conn = srv.get_db()
-    settings_repo.set(conn, "scrape_keyword", (body.keyword or "").strip())
-    settings_repo.set(conn, "scrape_categories", json.dumps(body.categories or []))
-    settings_repo.set(conn, "scrape_skills", json.dumps(body.skills or []))
-    conn.commit()
-    return get_scrape_scope()

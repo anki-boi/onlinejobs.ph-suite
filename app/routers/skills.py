@@ -3,6 +3,7 @@ behaviour change.)"""
 
 from fastapi import HTTPException
 from fastapi.routing import APIRouter
+from scraper.client import ScrapeStopped
 from scraper.skills import fetch_skills, skills_to_db_rows
 from db.repos import skills as skill_repo
 from app.server import get_client, get_db
@@ -31,6 +32,8 @@ def refresh_skills():
     client = get_client()
     try:
         skills = fetch_skills(client, keyword="")
+    except ScrapeStopped:
+        raise  # user-initiated stop → 409 envelope, not a 502 upstream error
     except Exception as exc:
         raise HTTPException(502, f"Skills API error: {exc}")
     rows = skills_to_db_rows(skills)

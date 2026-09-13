@@ -14,7 +14,8 @@ import os
 import sqlite3
 
 import requests
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -28,7 +29,7 @@ from resumes import render as resume_render  # noqa: F401 (re-exported for route
 from resumes import ats as resume_ats_mod  # noqa: F401 (re-exported for routers/tests)
 from resumes.schema import validate  # noqa: F401 (re-exported for routers/tests)
 from resumes.tailor import LLMClient, job_brief, tailor  # noqa: F401 (re-exported for routers/tests)
-from scraper.client import DEFAULT_BASE_URL, OJClient
+from scraper.client import DEFAULT_BASE_URL, OJClient, ScrapeStopped
 from scraper.pipeline import enrich, harvest  # noqa: F401 (re-exported for routers/tests)
 from scraper.skills import fetch_skills  # noqa: F401 (re-exported for routers/tests)
 
@@ -141,6 +142,63 @@ from app.services import keywords as _kw  # noqa: E402
 apply_keyword_filters = _kw.apply_keyword_filters
 _apply_keyword_filters = _kw.apply_keyword_filters
 _keyword_regexes = _kw._keyword_regexes
+
+# ── W5.2: uniform error envelope ──────────────────────────────────────────────
+# Every JSON error response is {"error": {code, message, detail}} — one shape
+# for HTTP errors, validation, DB lock, user stop, and stray ValueErrors.
+
+_STATUS_CODE = {
+    400: "bad_request", 404: "not_found", 409: "conflict",
+    422: "validation_error", 500: "internal_error",
+    502: "upstream_error", 503: "unavailable",
+}
+
+
+def _err(code: str, message: str, detail=None) -> dict:
+    return {"error": {"code": code, "message": message, "detail": detail}}
+
+
+@app.exception_handler(HTTPException)
+async def _http_exc(_request, exc):
+    detail = exc.detail if isinstance(exc.detail, (list, dict)) else None
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=_err(_STATUS_CODE.get(exc.status_code, "error"),
+                     exc.detail if isinstance(exc.detail, str) else str(exc.detail),
+                     detail))
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exc(_request, exc):
+    # 422 messages name the field(s) — "keywords: field required", not raw loc tuples.
+    msgs = []
+    for e in exc.errors():
+        field = ".".join(str(p) for p in e["loc"] if p != "body")
+        msgs.append(f"{field}: {e['msg']}" if field else e["msg"])
+    return JSONResponse(status_code=422, content=_err(
+        "validation_error", "; ".join(msgs) or "invalid request",
+        [{"loc": list(e["loc"]), "msg": e["msg"], "type": e["type"]} for e in exc.errors()]))
+
+
+@app.exception_handler(ValueError)
+async def _value_exc(_request, exc):
+    return JSONResponse(status_code=400, content=_err("bad_value", str(exc)))
+
+
+@app.exception_handler(sqlite3.OperationalError)
+async def _sqlite_exc(_request, exc):
+    msg = str(exc)
+    if "locked" in msg:
+        return JSONResponse(status_code=503, content=_err("db_locked", msg))
+    return JSONResponse(status_code=500, content=_err("db_error", msg))
+
+
+@app.exception_handler(ScrapeStopped)
+async def _stopped_exc(_request, exc):
+    # User-initiated stop is not a failure — but a plain 409 with a clear code
+    # beats a 500 Internal Server Error for the caller.
+    return JSONResponse(status_code=409, content=_err("stopped", str(exc) or "run stopped by user"))
+
 
 # ── Health check ────────────────────────────────────────────────────────────
 

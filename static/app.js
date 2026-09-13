@@ -42,7 +42,7 @@ let currentJob = null;
 // ── Utils ───────────────────────────────────────────────────────────────────
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: {'Content-Type':'application/json'}, ...opts });
-  if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(b.detail||res.statusText); }
+  if (!res.ok) { const b = await res.json().catch(()=>({})); throw new Error(b.error?.message||res.statusText); }
   return res.json();
 }
 function toast(msg, type='info') {
