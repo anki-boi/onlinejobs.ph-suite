@@ -13,6 +13,7 @@ Run: python tools/check_fixtures.py
 
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")  # CP1252-safe on Windows
@@ -58,17 +59,28 @@ def main() -> int:
     total = get_total_results(r.text)
     check("search: dataLayer result count present", total is not None, str(total))
 
-    # 2 — a live job detail page (first job from the search page above)
-    if stubs and stubs[0].job_url:
-        url = stubs[0].job_url
-        if url.startswith("http"):
-            from urllib.parse import urlparse
-            url = urlparse(url).path
-        d = parse_job_detail(client.get(url).text, url)
-        check("detail: title + company parsed",
-              bool(d.title) and bool(d.company),
-              f"closed={d.is_closed}")
-        check("detail: description present", bool(d.description))
+    # 2 — a live job detail page (first open job from the search page above;
+    # the top of the list rotates as jobs close, so skip closed ones)
+    if stubs and any(s.job_url for s in stubs[:2]):
+        picked = False
+        for s in stubs[:2]:
+            if not s.job_url:
+                continue
+            url = s.job_url
+            if url.startswith("http"):
+                url = urlparse(url).path
+            d = parse_job_detail(client.get(url).text, url)
+            if d.is_closed:
+                print(f"note: {s.job_id} is closed live — trying the next job in the list")
+                continue
+            check("detail: title + company parsed",
+                  bool(d.title) and bool(d.company),
+                  f"closed={d.is_closed}")
+            check("detail: description present", bool(d.description))
+            picked = True
+            break
+        if not picked:
+            check("detail: found an open job to parse (first two live jobs closed?)", False)
     else:
         check("detail: could not pick a live job URL", False)
 
