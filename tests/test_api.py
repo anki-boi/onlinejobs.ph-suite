@@ -50,7 +50,7 @@ class TestJobsList:
         assert res.status_code == 200
         data = res.json()
         assert data["total"] == 0
-        assert data["jobs"] == []
+        assert data["items"] == []
 
     def test_with_jobs(self, client):
         from db.connection import get_conn
@@ -64,7 +64,7 @@ class TestJobsList:
         res = client.get("/api/jobs")
         data = res.json()
         assert data["total"] == 2
-        assert len(data["jobs"]) == 2
+        assert len(data["items"]) == 2
 
     def test_filter_by_status(self, client):
         from db.connection import get_conn
@@ -79,7 +79,7 @@ class TestJobsList:
         res = client.get("/api/jobs?status=Applied")
         data = res.json()
         assert data["total"] == 1
-        assert data["jobs"][0]["title"] == "Job A"
+        assert data["items"][0]["title"] == "Job A"
 
     def test_skills_or_param(self, client):
         from db.connection import get_conn
@@ -94,11 +94,11 @@ class TestJobsList:
                              skills=["Marketing"])
         conn.close()
 
-        res = client.get("/api/jobs?skills=Quickbooks,Audio%20Editing&per_page=99999")
+        res = client.get("/api/jobs?skills=Quickbooks,Audio%20Editing&per_page=500")
         data = res.json()
         # OR across the whole table, not just one page
         assert data["total"] == 2
-        assert {j["job_id"] for j in data["jobs"]} == {1, 2}
+        assert {j["job_id"] for j in data["items"]} == {1, 2}
 
     def test_sort_param(self, client):
         from db.connection import get_conn
@@ -111,10 +111,10 @@ class TestJobsList:
         conn.close()
 
         data = client.get("/api/jobs?sort=title&order=asc").json()
-        assert [j["title"] for j in data["jobs"]] == ["A job", "B job", "C job"]
+        assert [j["title"] for j in data["items"]] == ["A job", "B job", "C job"]
 
         data = client.get("/api/jobs?sort=title&order=desc").json()
-        assert [j["title"] for j in data["jobs"]] == ["C job", "B job", "A job"]
+        assert [j["title"] for j in data["items"]] == ["C job", "B job", "A job"]
 
         # unknown sort falls back to default ordering, no error
         data = client.get("/api/jobs?sort=nonexistent").json()
@@ -132,7 +132,7 @@ class TestJobsList:
 
         data = client.get("/api/jobs?has_salary=1").json()
         assert data["total"] == 1
-        assert data["jobs"][0]["job_id"] == 1
+        assert data["items"][0]["job_id"] == 1
 
         # default = all
         data = client.get("/api/jobs").json()
@@ -512,16 +512,16 @@ class TestPostedRangeAPI:
 
     def test_sort_asc_matches_displayed_date(self, client):
         self._seed(client)
-        res = client.get("/api/jobs?sort=posted_date&order=asc&per_page=99999")
+        res = client.get("/api/jobs?sort=posted_date&order=asc&per_page=500")
         assert res.status_code == 200
-        jobs = res.json()["jobs"]
+        jobs = res.json()["items"]
         # displayed order: 2026-01-05, 2026-01-15, then the date_found-fallback row last
         assert [j["job_id"] for j in jobs] == [3, 1, 2]
 
     def test_sort_desc_reversed(self, client):
         self._seed(client)
-        res = client.get("/api/jobs?sort=posted_date&order=desc&per_page=99999")
-        assert [j["job_id"] for j in res.json()["jobs"]] == [2, 1, 3]
+        res = client.get("/api/jobs?sort=posted_date&order=desc&per_page=500")
+        assert [j["job_id"] for j in res.json()["items"]] == [2, 1, 3]
 
     def test_range_filters(self, client):
         self._seed(client)

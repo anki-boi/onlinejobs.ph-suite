@@ -307,10 +307,10 @@ def test_jobs_min_ats_filter(client, conn, tmp_path, monkeypatch):
     job_repo.upsert_stub(conn, job_id=2, job_url="http://b", title="Welder & Carpenter",
                          skills=["Welding", "Carpentry"])
     conn.commit()
-    r = client.get("/api/jobs", params={"min_ats": 50, "per_page": 99999})
+    r = client.get("/api/jobs", params={"min_ats": 50, "per_page": 500})
     assert r.status_code == 200
     body = r.json()
-    kept = {j["title"] for j in body["jobs"]}
+    kept = {j["title"] for j in body["items"]}
     assert "Excel & Data Entry Assistant" in kept
     assert "Welder & Carpenter" not in kept
     assert body["total"] == 1

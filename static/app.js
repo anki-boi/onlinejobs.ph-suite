@@ -165,7 +165,7 @@ async function loadJobs() {
   const p = buildJobsParams(99999);
   try {
     const data = await api(`/api/jobs?${p}`);
-    renderJobs(data.jobs);
+    renderJobs(data.items);
     state.total = data.total;
     applyVisibleFilter();
     updateNextHint();
@@ -592,14 +592,8 @@ function renderSkills(filter) {
 
 // ── Export ──────────────────────────────────────────────────────────────────
 async function exportCSV() {
-  try {
-    const data = await api(`/api/jobs?${buildJobsParams(99999)}`);
-    const cols=['id','job_id','title','company','work_type','salary','skills','status','scrape_status','posted_date','date_found','job_url','notes'];
-    const csv=[cols.join(',')].concat(data.jobs.map(j=>cols.map(c=>`"${String(j[c]??'').replace(/"/g,'""')}"`).join(',')));
-    const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([csv.join('\n')],{type:'text/csv'}));
-    a.download=`jobs_${new Date().toISOString().slice(0,10)}.csv`; a.click();
-    toast('Exported','success');
-  } catch(e) { toast(e.message,'error'); }
+  // W5.3: per_page is capped at 500 — full dumps use the server-side CSV export.
+  window.location = '/api/jobs/export';
 }
 
 // ── Event wiring ────────────────────────────────────────────────────────────

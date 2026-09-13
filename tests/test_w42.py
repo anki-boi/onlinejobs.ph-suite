@@ -82,8 +82,8 @@ def test_api_salary_filters(client):
     res = client.get("/api/jobs", params={"salary_min_monthly": 50000})
     assert res.status_code == 200
     data = res.json()
-    assert data["total"] == 1 and data["jobs"][0]["title"] == "A"
+    assert data["total"] == 1 and data["items"][0]["title"] == "A"
     res = client.get("/api/jobs", params={"salary_currency": "USD", "salary_max_monthly": 50000})
-    assert sorted(j["title"] for j in res.json()["jobs"]) == ["B", "E"]
+    assert sorted(j["title"] for j in res.json()["items"]) == ["B", "E"]
     # FastAPI validates the float — garbage is a 422, not a 500
     assert client.get("/api/jobs", params={"salary_min_monthly": "lots"}).status_code == 422

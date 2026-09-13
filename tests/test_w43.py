@@ -51,11 +51,11 @@ def test_min_ats_global_total(client, monkeypatch):
     res = client.get("/api/jobs", params={"min_ats": 60, "per_page": 50})
     data = res.json()
     assert data["total"] == 61
-    assert len(data["jobs"]) == 50
+    assert len(data["items"]) == 50
     res2 = client.get("/api/jobs", params={"min_ats": 60, "per_page": 50, "page": 2})
-    assert len(res2.json()["jobs"]) == 11
+    assert len(res2.json()["items"]) == 11
     # nothing below the threshold leaks in
-    assert all(int(j["title"].rsplit(" ", 1)[-1]) >= 60 for j in data["jobs"])
+    assert all(int(j["title"].rsplit(" ", 1)[-1]) >= 60 for j in data["items"])
 
 
 def test_min_ats_invalidates_on_job_change(client, monkeypatch):

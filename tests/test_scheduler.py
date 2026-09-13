@@ -197,13 +197,13 @@ class TestW25SchedulerHonorsConfig:
         conn.commit()
         seen = {}
         def fake_enrich(client, jobs, workers=3):
-            seen["jobs"] = jobs
+            seen["items"] = jobs
             return iter(())
         monkeypatch.setattr(scheduler, "enrich", fake_enrich)
         _events, publish = _record()
         # 10 days old: stale under the default 7d window…
         scheduler.run_once(SchedulerClient(), conn, publish, {})
-        assert any(jid == row_id for jid, _u in seen["jobs"])
+        assert any(jid == row_id for jid, _u in seen["items"])
         # …not under a 30d window
         seen.clear()
         scheduler.run_once(SchedulerClient(), conn, publish, {"enrich_interval_days": 30})

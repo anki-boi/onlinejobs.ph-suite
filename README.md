@@ -174,6 +174,8 @@ or by hand: `python scripts/backup.py`. Restore = copy a snapshot back over
 
 Full architecture: `docs/architecture.md`.
 
+**Error contract (W5.2):** every non-2xx JSON response is `{"error": {"code", "message", "detail"}}` — e.g. `not_found`, `bad_request`, `validation_error` (message names the field, `detail` lists `{loc,msg,type}`), `conflict` / `stopped` (user-initiated stop is a conflict, not a crash), `db_locked` (503), `bad_value` (400). Success bodies are never enveloped.
+
 ## Health check
 
 `GET /health` probes the database (short busy timeout) and the site (5 s

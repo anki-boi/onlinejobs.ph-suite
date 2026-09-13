@@ -68,6 +68,12 @@ def list_jobs(
     salary_currency: str | None = None,        # comma-separated, e.g. "USD,PHP"
     min_ats: int = 0,  # hide jobs whose best-profile ATS score is below this
 ):
+    # W5.3: per_page is capped — one page must stay small enough to render.
+    if per_page > 500:
+        raise HTTPException(400, "per_page is limited to 500 (use /api/jobs/export for full dumps)")
+    if per_page < 1:
+        per_page = 1
+    page = max(1, page)
     conn = srv.get_db()
     from app.services import ats_cache
     ats_cache.ensure_fresh(
@@ -87,7 +93,15 @@ def list_jobs(
         salary_max_monthly=salary_max_monthly,
         salary_currency=salary_currency,
     )
-    return {"jobs": [dict(r) for r in rows], "total": total, "page": page, "per_page": per_page}
+    items = [dict(r) for r in rows]
+    return {
+        "items": items,
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        # W5.3: opaque cursor for the next page (null on the last one).
+        "next_cursor": str(page + 1) if page * per_page < total else None,
+    }
 
 
 @router.get("/api/jobs/{job_pk}")
