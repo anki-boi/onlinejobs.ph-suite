@@ -15,6 +15,28 @@ from app import server as srv
 
 router = APIRouter()
 
+
+def _acquire_pipeline(conn, run_id, token, client, scope=None):
+    """Take the pipeline for one run. Returns (events, acquired): events are
+    the SSE lines to emit when the run could not start (lock or cross-process
+    claim busy); begin_run has been called when acquired."""
+    if not scheduler.pipeline_lock.acquire(blocking=False):
+        return [sse("error", "Another run is in progress (auto-run or another tab) — try again shortly"),
+                sse("done", "busy")], False
+    # W2.6: cross-process guard — a second instance sharing this DB would double-scrape.
+    try:
+        ok, msg = srv._claim_run_or_busy(conn)
+    except Exception as exc:  # e.g. a stale implicit transaction
+        scheduler.pipeline_lock.release()
+        return [sse("error", f"could not claim the pipeline lock: {exc}"),
+                sse("done", "busy")], False
+    if not ok:
+        scheduler.pipeline_lock.release()
+        return [sse("error", f"{msg} — try again shortly"), sse("done", "busy")], False
+    # W2.8: this run owns the pipeline now — Stop reaches exactly this run.
+    scheduler.begin_run(run_id, token, client, scope=scope)
+    return [], True
+
 # /api/schedule lives in app/routers/settings.py
 
 
@@ -31,10 +53,14 @@ def run_pipeline(body: PipelineRequest):
     keyword = (body.keyword or "").strip()
     categories = body.categories or []
     posted_since = body.posted_since.isoformat() if body.posted_since else None
+    scope = {  # W5.4: canonical scope of this run (for idempotency + scope tracking)
+        "keyword": keyword,
+        "categories": list(categories),
+        "skills": list(body.skills or []),
+        "posted_since": posted_since,
+    }
 
-    # Resolve skill names to OJ.ph IDs — from the local skill_tags table first
-    # (same data the UI lists); the API is only consulted for names the DB
-    # doesn't know (avoids a full skills fetch on every run).
+    # Resolve skill names to OJ.ph IDs from the local skill_tags first; the API only covers names the DB doesn't know.
     skill_ids: list[int] = []
     if body.skills:
         db_rows = conn.execute("SELECT id, name FROM skill_tags").fetchall()
@@ -65,25 +91,17 @@ def run_pipeline(body: PipelineRequest):
 
     def generate():
         # Shared lock with the auto-run scheduler: one scrape at a time.
-        if not scheduler.pipeline_lock.acquire(blocking=False):
-            yield sse("error", "Another run is in progress (auto-run or another tab) — try again shortly")
-            yield sse("done", "busy")
+        if scheduler.is_running() and scheduler.active_scope() == scope:
+            # W5.4 idempotency: an identical run is already in progress —
+            # report its run_id instead of failing with busy.
+            yield sse("run_id", {"run_id": scheduler.active_run_id,
+                                 "status": "already_running"})
+            yield sse("done", "already_running")
             return
-        # W2.6: cross-process guard — a second instance sharing this DB would double-scrape.
-        try:
-            ok, msg = srv._claim_run_or_busy(conn)
-        except Exception as exc:  # e.g. a stale implicit transaction
-            scheduler.pipeline_lock.release()
-            yield sse("error", f"could not claim the pipeline lock: {exc}")
-            yield sse("done", "busy")
+        events, acquired = _acquire_pipeline(conn, run_id, token, client, scope)
+        if not acquired:
+            yield from events
             return
-        if not ok:
-            yield sse("error", f"{msg} — try again shortly")
-            yield sse("done", "busy")
-            scheduler.pipeline_lock.release()
-            return
-        # W2.8: this run owns the pipeline now — Stop reaches exactly this run.
-        scheduler.begin_run(run_id, token, client)
         try:
             new_job_ids: list[int] = []
             for event in srv.harvest(client, keyword=keyword, categories=categories or None,
@@ -96,21 +114,13 @@ def run_pipeline(body: PipelineRequest):
                     yield sse("error", event.message)
                 elif event.type == "harvest_result":
                     inserted, new_items = pipeline_apply.apply_harvest(conn, event)
-                    # Emit each new job immediately for real-time UI
-                    for stub_data, row_id in new_items:
+                    for stub_data, row_id in new_items:  # each new job streams out immediately
                         if stub_data.get("job_id"):
                             new_job_ids.append(row_id)
-                        yield sse("harvest_stub", {
-                            "row_id": row_id,
-                            "job_id": stub_data.get("job_id"),
-                            "title": stub_data.get("title"),
-                            "company": stub_data.get("company"),
-                            "work_type": stub_data.get("work_type"),
-                            "posted_date": stub_data.get("posted_date"),
-                            "salary": stub_data.get("salary"),
-                            "skills": stub_data.get("skills"),
-                            "job_url": stub_data.get("job_url"),
-                        })
+                        yield sse("harvest_stub", {k: stub_data.get(k) for k in
+                                                  ("job_id", "title", "company", "work_type",
+                                                   "posted_date", "salary", "skills", "job_url")}
+                                  | {"row_id": row_id})
                     yield sse("harvest_done", {"inserted": inserted, "total": len(event.data.get("stubs", []))})
                 elif event.type == "summary":
                     yield sse("harvest_summary", event.data)
@@ -190,24 +200,10 @@ def run_check(body: CheckRequest):
         jobs_to_check = [t for t in jobs_to_check if t[1].startswith(prefix)]
 
     def generate():
-        if not scheduler.pipeline_lock.acquire(blocking=False):
-            yield sse("error", "Another run is in progress (auto-run or another tab) — try again shortly")
-            yield sse("done", "busy")
+        events, acquired = _acquire_pipeline(conn, run_id, token, client)
+        if not acquired:
+            yield from events
             return
-        try:  # W2.6: cross-process guard (same as /api/pipeline/run)
-            ok, msg = srv._claim_run_or_busy(conn)
-        except Exception as exc:
-            scheduler.pipeline_lock.release()
-            yield sse("error", f"could not claim the pipeline lock: {exc}")
-            yield sse("done", "busy")
-            return
-        if not ok:
-            yield sse("error", f"{msg} — try again shortly")
-            yield sse("done", "busy")
-            scheduler.pipeline_lock.release()
-            return
-        # W2.8: this run owns the pipeline now — Stop reaches exactly this run.
-        scheduler.begin_run(run_id, token, client)
         try:
             if not jobs_to_check:
                 yield sse("log", "No jobs need checking")

@@ -2,11 +2,12 @@
 stats + full reset. (W5.1 split from server.py; no behaviour change.)"""
 
 import csv as _csv
+import hashlib
 import io as _io
 import sqlite3
 
-from fastapi import HTTPException
-from fastapi.responses import Response
+from fastapi import HTTPException, Request
+from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRouter
 from app import events as events_hub
 from app.schemas import FollowUpUpdate, NotesUpdate, StatusUpdate
@@ -43,8 +44,8 @@ def export_jobs():
 
 
 @router.get("/api/jobs")
-def list_jobs(
-    page: int = 1,
+def list_jobs(request: Request,
+              page: int = 1,
     per_page: int = 50,
     status: str | None = None,
     search: str | None = None,
@@ -94,7 +95,7 @@ def list_jobs(
         salary_currency=salary_currency,
     )
     items = [dict(r) for r in rows]
-    return {
+    payload = {
         "items": items,
         "page": page,
         "per_page": per_page,
@@ -102,6 +103,16 @@ def list_jobs(
         # W5.3: opaque cursor for the next page (null on the last one).
         "next_cursor": str(page + 1) if page * per_page < total else None,
     }
+    # W5.4: ETag from the jobs table version + the exact query string.
+    # Repeat GETs with If-None-Match get a 304 (no body) until the data
+    # or the query changes.
+    version = job_repo.get_jobs_version(conn)
+    etag = '"%s"' % hashlib.sha1(f"{version}:{request.url.query}".encode()).hexdigest()[:16]
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    out = JSONResponse(payload)
+    out.headers["ETag"] = etag
+    return out
 
 
 @router.get("/api/jobs/{job_pk}")

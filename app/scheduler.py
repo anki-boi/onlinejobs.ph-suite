@@ -43,6 +43,9 @@ pipeline_lock = threading.Lock()
 # set for the auto-run that followed).
 active_runs: dict[str, StopToken] = {}
 active_run_id: str | None = None
+# W5.4: the scope (keyword/categories/skills/posted_since) of the active run,
+# so an identical POST /api/pipeline/run can be recognized as idempotent.
+active_run_scope: dict | None = None
 
 
 def new_run_id() -> str:
@@ -54,21 +57,28 @@ def register_run(run_id: str, token: StopToken) -> None:
     active_runs[run_id] = token
 
 
-def begin_run(run_id: str, token: StopToken, client) -> None:
+def begin_run(run_id: str, token: StopToken, client, scope: dict | None = None) -> None:
     """Called when a run owns the pipeline lock: register the token, mark the
     run active, and point the shared client at it."""
-    global active_run_id
+    global active_run_id, active_run_scope
     register_run(run_id, token)
     active_run_id = run_id
+    active_run_scope = scope
     client.set_stop(token)
+
+
+def active_scope() -> dict | None:
+    """W5.4: scope of the currently active run (None when nothing is running)."""
+    return active_run_scope if active_run_id else None
 
 
 def end_run(run_id: str) -> None:
     """Run finished (complete/stopped/failed): drop its token."""
-    global active_run_id
+    global active_run_id, active_run_scope
     active_runs.pop(run_id, None)
     if active_run_id == run_id:
         active_run_id = None
+        active_run_scope = None
 
 
 def stop_run(run_id: str | None = None) -> bool:
@@ -172,7 +182,13 @@ def tick(client_factory=None) -> None:
         # W2.8: this run gets its own stop token; the shared client now
         # references it, so a stop can't leak into the next run.
         run_id = new_run_id()
-        begin_run(run_id, StopToken(), client)
+        scope = {  # W5.4: record the auto-run scope for idempotency checks
+            "keyword": (settings_repo.get(conn, "scrape_keyword", "") or "").strip(),
+            "categories": json.loads(settings_repo.get(conn, "scrape_categories", "[]") or "[]"),
+            "skills": json.loads(settings_repo.get(conn, "scrape_skills", "[]") or "[]"),
+            "posted_since": None,
+        }
+        begin_run(run_id, StopToken(), client, scope=scope)
         summary = run_once(client, conn, events.publish, cfg)
         record_run_status(conn, stopped=client.stopped)
         events.publish("schedule_done", {**summary, "run_id": run_id})

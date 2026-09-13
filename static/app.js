@@ -409,6 +409,9 @@ async function streamSSE(url, body) {
 const PHASE_RE = /^(Harvest:|Harvest done|Enriching|No new jobs|No jobs|\[STOPPED\]|⛔)/;
 function handleSSE(ev, d) {
   if (ev === 'run_started' && d && d.run_id) state.activeRunId = d.run_id;
+  // W5.4: identical run already in progress — attach its id, don't look like a failure
+  if (ev === 'run_id' && d && d.status === 'already_running')
+    toast('Same run already in progress — id ' + String(d.run_id).slice(0, 8), 'info');
   switch(ev) {
     case 'log': {
       const msg = typeof d==='string'?d:(d.message||'');
