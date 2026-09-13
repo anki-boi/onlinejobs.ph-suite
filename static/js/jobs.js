@@ -1,7 +1,7 @@
 /* W6.1: jobs table — list, pagination (W6.2), virtual scroll (W6.3), sort, column filters */
 import { state, $, tbody, api, toast, log, esc, fmtDate, COL_VALUES, SORT_DEFAULT_ORDER } from './core.js';
 import { loadResumeStatus } from './resume.js';
-import { updateNextHint } from './stats.js';
+import { loadStats, updateNextHint } from './stats.js';
 
 // Shared query builder so the table and the CSV export always see the same view.
 function buildJobsParams(perPage) {

@@ -1,6 +1,7 @@
 /* W6.1: keyword/skill/category filters, chips, scrape scope, reset */
 import { state, $, api, toast, esc } from './core.js';
 import { loadJobs } from './jobs.js';
+import { loadStats } from './stats.js';
 
 async function applyFilters() {
   const pos = state.posFilters;
