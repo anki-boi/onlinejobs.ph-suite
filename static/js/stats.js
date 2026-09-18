@@ -8,7 +8,7 @@ async function loadConfigBanner() {
   if (!el) return;
   let r;
   try { r = await api('/api/config'); } catch (e) { return; }
-  state.fx = (r.config||{}).fx_to_php || null;  // W4.2: rate for the salary-chip tooltip
+  state.fx = r.fx_metadata || null;  // live rate + checked-at, for the salary-chip tooltip
   const msgs = r.features_off || [];
   if (!msgs.length) { el.hidden = true; el.innerHTML = ''; return; }
   const sig = JSON.stringify(msgs);

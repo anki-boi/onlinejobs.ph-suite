@@ -41,9 +41,7 @@ def _acquire_pipeline(conn, run_id, token, client, scope=None):
 
 @router.post("/api/pipeline/run")
 def run_pipeline(body: PipelineRequest):
-
     """Start a scrape+enrich run as an SSE stream. A POST with the same scope as the run in progress returns that run_id (already_running) instead of busy."""
-    """Full pipeline: harvest → enrich. Streams SSE."""
     conn = srv.get_db()
     client = srv.get_client()
 
@@ -151,11 +149,14 @@ def run_pipeline(body: PipelineRequest):
                         yield sse("error", event.message)
                     elif event.type == "enrich_result":
                         d = event.data
-                        if pipeline_apply.apply_enrich(conn, d):
-                            pass
+                        pipeline_apply.apply_enrich(conn, d)
                         yield sse("enrich_done", {k: v for k, v in d.items() if k != "description"})
                     elif event.type == "summary":
                         yield sse("enrich_summary", event.data)
+                if not token.stopped:
+                    neg_h, pos_h, restored = pipeline_apply.apply_saved_keyword_rules(conn)
+                    if neg_h + pos_h + restored:
+                        yield sse("log", f"Keyword rules: {neg_h + pos_h} hidden, {restored} restored")
 
             stopped = token.stopped
             scheduler.record_run_status(conn, stopped=stopped)
@@ -173,9 +174,7 @@ def run_pipeline(body: PipelineRequest):
 
 @router.post("/api/pipeline/check")
 def run_check(body: CheckRequest):
-
     """Re-check the posting status of existing jobs (SSE stream)."""
-    """Re-check existing jobs."""
     conn = srv.get_db()
     client = srv.get_client()
 
@@ -196,10 +195,9 @@ def run_check(body: CheckRequest):
     jobs_to_check = [(r["id"], r["job_url"]) for r in rows if r["job_url"]]
 
     # Only re-check jobs on the configured site; stray fixture rows (test.com) would burn retries.
-    base = (srv._cfg.get("base_url") or "").strip()
+    base = (srv._cfg.get("base_url") or "").rstrip('/')
     if base:
-        prefix = base.rstrip('/') + '/'
-        jobs_to_check = [t for t in jobs_to_check if t[1].startswith(prefix)]
+        jobs_to_check = [t for t in jobs_to_check if t[1].startswith(base + '/')]
 
     def generate():
         events, acquired = _acquire_pipeline(conn, run_id, token, client)
@@ -225,6 +223,10 @@ def run_check(body: CheckRequest):
                     yield sse("enrich_done", {k: v for k, v in d.items() if k != "description"})
                 elif event.type == "summary":
                     yield sse("enrich_summary", event.data)
+            if not token.stopped:
+                neg_h, pos_h, restored = pipeline_apply.apply_saved_keyword_rules(conn)
+                if neg_h + pos_h + restored:
+                    yield sse("log", f"Keyword rules: {neg_h + pos_h} hidden, {restored} restored")
             stopped = token.stopped
             scheduler.record_run_status(conn, stopped=stopped)
             yield sse("done", "stopped" if stopped else "complete")
@@ -241,9 +243,7 @@ def run_check(body: CheckRequest):
 
 @router.post("/api/pipeline/stop")
 def stop_pipeline(body: StopRequest = None):
-
-    """Stop the active run, or the run_id named in the body."""
-    """W2.8: stop one run (a run_id, or the active run when omitted)."""
+    """Stop the active run, or the run_id named in the body (W2.8: a run_id, or the active run when omitted)."""
     run_id = body.run_id if body is not None else None
     stopped = scheduler.stop_run(run_id)
     return {"ok": True,

@@ -55,14 +55,18 @@ function jobRowHtml(j) {
   const skillsArr = j.skills ? (Array.isArray(j.skills) ? j.skills : String(j.skills).split(',')) : [];
   const skillsHtml = skillsArr.slice(0,3).map(s=>`<span class="skill-tag">${esc(String(s).trim())}</span>`).join('');
   const repostBadge = j.repost_of ? '<span class="repost-badge" title="Same title posted again by the same employer — see the original">↻ repost</span>' : '';
-  // Structured salary chip — currency from the stored field (W4.1); the old
-  // '$'-sniffing guess only for pre-backfill rows. Tooltip shows the FX rate
-  // the normalization used, so "US$800/mo = ₱46,400" is verifiable.
+  // Salary chip = the PHP-normalized monthly value (W4.1). NULL = no live FX
+  // rate was available → no chip: outdated money is worse than no money.
+  // Tooltip shows the exact live rate + when it was checked, so
+  // "US$800/mo = ₱50,103" is verifiable.
   const cur = j.salary_currency || ((j.salary||'').includes('$') ? 'USD' : 'PHP');
-  const fxRate = (state.fx||{})[cur];
-  const fxTip = (cur === 'USD' && fxRate) ? ` normalized to ₱ at 1 US$ = ₱${fxRate} (config fx_to_php)` : '';
-  const salChip = j.salary_min != null
-    ? `<div class="salary-chip" title="PHP-normalized monthly${fxTip}">₱${j.salary_min===j.salary_max ? j.salary_min.toLocaleString() : j.salary_min.toLocaleString()+'–'+j.salary_max.toLocaleString()}/mo</div>`
+  const fxMeta = state.fx || {};
+  const fxRate = fxMeta[cur.toLowerCase()];
+  const fxTip = (cur !== 'PHP' && fxRate)
+    ? ` normalized to ₱ at 1 ${cur} = ₱${fxRate}${fxMeta.at ? ` (rate checked ${fxMeta.at})` : ''}`
+    : '';
+  const salChip = (j.salary_monthly_min != null && j.salary_monthly_max != null)
+    ? `<div class="salary-chip" title="PHP-normalized monthly${fxTip}">₱${j.salary_monthly_min===j.salary_monthly_max ? j.salary_monthly_min.toLocaleString() : j.salary_monthly_min.toLocaleString()+'–'+j.salary_monthly_max.toLocaleString()}/mo</div>`
     : '';
   // Two kinds of hidden: yours (solid) vs keyword auto-hide (dashed, remembers what it was)
   const badge = j.status === 'Hidden'

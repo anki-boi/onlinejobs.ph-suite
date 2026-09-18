@@ -54,6 +54,16 @@ STATIC_DIR = dbconn.BASE_DIR / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+@app.middleware("http")
+async def _no_cache_static(request, call_next):
+    """Force revalidation of static assets: an old cached jobs.js would show
+    stale UI logic against fresh data (cheap 304 via ETag when unchanged)."""
+    response = await call_next(request)
+    if request.url.path.startswith("/static"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 class _LiveCfg:
     """W1.4: every read goes to the live config state, so a
     POST /api/config/reload is picked up immediately (no restart)."""

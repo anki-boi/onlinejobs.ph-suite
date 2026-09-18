@@ -15,15 +15,25 @@ import db.migrate as dbmigrate
 from db.repos import jobs as job_repo
 from scraper.salary import normalize_to_php
 
-DEFAULT_USD = 58.0  # config.json fx_to_php.usd
+DEFAULT_USD = 58.0  # stubbed rate for tests (production fetches live ECB rates)
 
 
-def _set_live_config(monkeypatch, cfg: dict):
-    import app.config as appconfig
-    # _live feeds the write path (jobs repo); _read_disk feeds the v5
-    # backfill (it deliberately does not use the live cache)
-    monkeypatch.setattr(appconfig, "_live", cfg)
-    monkeypatch.setattr(appconfig, "_read_disk", lambda: cfg)
+def _set_fx(monkeypatch, fx: dict):
+    """Stub the live FX fetch: fx maps (case-insensitive) currency → rate."""
+    import scraper.salary as salary
+    norm = {str(k).lower(): v for k, v in fx.items()}
+    def fake(currencies=None, timeout=10):
+        out = {}
+        for c in currencies or []:
+            cu = (c or "").upper()
+            if cu == "PHP":
+                out[cu] = 1.0
+                continue
+            v = norm.get(c.lower())
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                out[cu] = v  # no rate → omitted, exactly like a failed fetch
+        return out
+    monkeypatch.setattr(salary, "fetch_fx_to_php", fake)
 
 
 FIXTURE_ROWS = [
@@ -75,8 +85,10 @@ def _row(conn, url: str) -> sqlite3.Row:
 
 
 def test_normalize_to_php_basic():
-    assert normalize_to_php(800.0, 1200.0, "USD") == (46400.0, 69600.0)
+    # No live rate (tests are offline) → NULL, never a guess
+    assert normalize_to_php(800.0, 1200.0, "USD") == (None, None)
     assert normalize_to_php(800.0, 1200.0, "PHP") == (800.0, 1200.0)
+    assert normalize_to_php(800.0, 1200.0, "USD", {"usd": 58.0}) == (46400.0, 69600.0)
 
 
 def test_normalize_to_php_unknown_or_missing():
@@ -86,7 +98,7 @@ def test_normalize_to_php_unknown_or_missing():
     assert normalize_to_php(None, None, "USD") == (None, None)
 
 
-def test_normalize_to_php_config_rate_wins():
+def test_normalize_to_php_fx_rate_used():
     assert normalize_to_php(800.0, 1200.0, "USD", {"usd": 50.0}) == (40000.0, 60000.0)
 
 
@@ -94,7 +106,7 @@ def test_normalize_to_php_config_rate_wins():
 
 
 def test_v5_backfill_legacy_db(tmp_path, monkeypatch):
-    _set_live_config(monkeypatch, {"fx_to_php": {"usd": DEFAULT_USD}})
+    _set_fx(monkeypatch, {"usd": DEFAULT_USD})
     conn = _make_db(tmp_path, 4, legacy=True)
 
     dbmigrate.run(conn, dbconn.SCHEMA_VERSION)
@@ -123,7 +135,7 @@ def test_v5_backfill_legacy_db(tmp_path, monkeypatch):
 
 def test_v5_backfill_fresh_schema_db(tmp_path, monkeypatch):
     """A v4 DB that already has the final table shape: only the backfill runs."""
-    _set_live_config(monkeypatch, {"fx_to_php": {"usd": DEFAULT_USD}})
+    _set_fx(monkeypatch, {"usd": DEFAULT_USD})
     conn = _make_db(tmp_path, 4, legacy=False)
     dbmigrate.run(conn, dbconn.SCHEMA_VERSION)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == dbconn.SCHEMA_VERSION
@@ -133,7 +145,7 @@ def test_v5_backfill_fresh_schema_db(tmp_path, monkeypatch):
 
 
 def test_v5_run_twice_is_stable(tmp_path, monkeypatch):
-    _set_live_config(monkeypatch, {"fx_to_php": {"usd": DEFAULT_USD}})
+    _set_fx(monkeypatch, {"usd": DEFAULT_USD})
     conn = _make_db(tmp_path, 4, legacy=True)
     dbmigrate.run(conn, dbconn.SCHEMA_VERSION)
     first = [dict(r) for r in conn.execute(
@@ -151,7 +163,7 @@ def test_v5_run_twice_is_stable(tmp_path, monkeypatch):
 
 
 def test_v5_records_fx_override(tmp_path, monkeypatch):
-    _set_live_config(monkeypatch, {"fx_to_php": {"usd": 50.0}})
+    _set_fx(monkeypatch, {"usd": 50.0})
     conn = _make_db(tmp_path, 4, legacy=True)
     dbmigrate.run(conn, dbconn.SCHEMA_VERSION)
     assert _row(conn, "u1")["salary_monthly_min"] == 40000.0
@@ -161,8 +173,8 @@ def test_v5_records_fx_override(tmp_path, monkeypatch):
 
 
 def test_v5_metadata_keys_lowercased(tmp_path, monkeypatch):
-    """A user config with uppercase 'USD' must not duplicate the default 'usd'."""
-    _set_live_config(monkeypatch, {"fx_to_php": {"USD": 50.0}})
+    """A rate table with uppercase 'USD' must not duplicate the stored 'usd'."""
+    _set_fx(monkeypatch, {"USD": 50.0})
     conn = _make_db(tmp_path, 4, legacy=True)
     dbmigrate.run(conn, dbconn.SCHEMA_VERSION)
     assert _row(conn, "u1")["salary_monthly_min"] == 40000.0  # lookup is case-insensitive
@@ -172,18 +184,31 @@ def test_v5_metadata_keys_lowercased(tmp_path, monkeypatch):
 
 
 def test_v5_no_parseable_rows_no_fx_metadata(tmp_path, monkeypatch):
-    _set_live_config(monkeypatch, {"fx_to_php": {"usd": DEFAULT_USD}})
+    _set_fx(monkeypatch, {"usd": DEFAULT_USD})
     conn = _make_db(tmp_path, 4, legacy=True)
     conn.execute("UPDATE jobs SET salary = 'TBD'")
     conn.commit()
     dbmigrate.run(conn, dbconn.SCHEMA_VERSION)
     assert conn.execute(
         "SELECT COUNT(*) FROM app_settings WHERE key = 'fx_metadata'"
-    ).fetchone()[0] == 0  # W4.2 tooltip falls back to the config default
+    ).fetchone()[0] == 0
+
+
+def test_v5_no_live_rate_leaves_nulls(tmp_path):
+    """Offline (autouse stub) — no live rate means no normalization: rows stay
+    NULL, no fx_metadata written. Outdated money is worse than no money."""
+    conn = _make_db(tmp_path, 4, legacy=True)
+    dbmigrate.run(conn, dbconn.SCHEMA_VERSION)
+    u1 = _row(conn, "u1")
+    assert u1["salary_currency"] is None
+    assert u1["salary_monthly_min"] is None
+    assert conn.execute(
+        "SELECT COUNT(*) FROM app_settings WHERE key = 'fx_metadata'"
+    ).fetchone()[0] == 0
 
 
 def test_fresh_db_reaches_v5(tmp_path, monkeypatch):
-    _set_live_config(monkeypatch, {"fx_to_php": {"usd": DEFAULT_USD}})
+    _set_fx(monkeypatch, {"usd": DEFAULT_USD})
     monkeypatch.setattr(dbconn, "DB_PATH", str(tmp_path / "fresh.db"))
     conn = dbconn.init_db()
     assert conn.execute("PRAGMA user_version").fetchone()[0] == dbconn.SCHEMA_VERSION
@@ -195,7 +220,7 @@ def test_fresh_db_reaches_v5(tmp_path, monkeypatch):
 
 
 def _db_at_v5(tmp_path, monkeypatch, legacy=True):
-    _set_live_config(monkeypatch, {"fx_to_php": {"usd": DEFAULT_USD}})
+    _set_fx(monkeypatch, {"usd": DEFAULT_USD})
     conn = _make_db(tmp_path, 4, legacy=legacy)
     dbmigrate.run(conn, dbconn.SCHEMA_VERSION)
     return conn
@@ -217,7 +242,7 @@ def test_sort_salary_asc_nulls_still_last(tmp_path, monkeypatch):
 
 
 def _fresh(tmp_path, monkeypatch):
-    _set_live_config(monkeypatch, {"fx_to_php": {"usd": DEFAULT_USD}})
+    _set_fx(monkeypatch, {"usd": DEFAULT_USD})
     monkeypatch.setattr(dbconn, "DB_PATH", str(tmp_path / "write.db"))
     return dbconn.init_db()
 

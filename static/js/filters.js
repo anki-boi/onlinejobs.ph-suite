@@ -42,9 +42,9 @@ function updateFilterHiddenUI(n) {
 
 function addChip(inputId, arr) {
   const input = $(inputId);
-  const val = input.value.trim();
-  if (!val) return;
-  if (!arr.includes(val)) arr.push(val);
+  // Comma/semicolon-separated input adds one chip per keyword (OR semantics).
+  input.value.split(/[,;]/).map(s => s.trim()).filter(Boolean)
+    .forEach(v => { if (!arr.includes(v)) arr.push(v); });
   input.value='';
   renderChips();
 }

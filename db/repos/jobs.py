@@ -48,14 +48,48 @@ def norm_title(title: str | None) -> str:
 
 def _salary_struct(salary: str | None) -> tuple:
     """Structured salary fields for one salary text: (min, max, currency,
-    monthly_min_PHP, monthly_max_PHP). FX rate from config `fx_to_php`
-    (W4.1); no rate → monthly NULL, never approximated."""
-    from db import connection as dbconn
+    monthly_min_PHP, monthly_max_PHP). FX rate is LIVE (W4.1); no live rate
+    → monthly NULL, never approximated, never stale."""
     from scraper.salary import normalize_to_php, parse_salary
     mn, mx, cur = parse_salary(salary)
-    fx = (dbconn.get_config().get("fx_to_php") or {})
-    pmn, pmx = normalize_to_php(mn, mx, cur, fx)
+    pmn, pmx = normalize_to_php(mn, mx, cur)
     return (mn, mx, cur, pmn, pmx)
+
+
+def renormalize(conn) -> dict:
+    """Recompute salary_monthly_* from LIVE rates (server start + daily).
+
+    Fills rows that were NULL when no live rate was available, and fixes
+    rows whose stored rate is now outdated (a stale ₱ number is a wrong
+    number). If no live rate can be fetched, nothing is touched and {} is
+    returned. The rates + timestamp are recorded in app_settings.fx_metadata
+    so the UI can state exactly what it normalized at.
+    Returns the live rate table used (possibly {})."""
+    import json
+    from db.repos import settings as settings_repo
+    from scraper.salary import fetch_fx_to_php
+    curs = [r[0].upper() for r in conn.execute(
+        "SELECT DISTINCT salary_currency FROM jobs "
+        "WHERE salary_currency IS NOT NULL AND salary_currency != 'PHP'")]
+    fx = {c: v for c, v in fetch_fx_to_php(curs).items() if c != "PHP"}
+    if not fx:
+        return {}
+    n = 0
+    for cur, rate in fx.items():
+        r = conn.execute(
+            "UPDATE jobs SET salary_monthly_min = ROUND(salary_min * ?, 2), "
+            "salary_monthly_max = ROUND(salary_max * ?, 2) "
+            "WHERE salary_currency = ? AND salary_min IS NOT NULL",
+            (rate, rate, cur))
+        n += r.rowcount
+    raw = settings_repo.get(conn, "fx_metadata", "")
+    meta = json.loads(raw) if raw else {}
+    meta.update({k.lower(): v for k, v in fx.items()})
+    import time as _time
+    meta["at"] = _time.strftime("%Y-%m-%d %H:%M:%S")
+    settings_repo.set(conn, "fx_metadata", json.dumps(meta))
+    conn.commit()
+    return fx
 
 
 def _find_repost_origin(conn, row_id: int, title: str, employer_id: int) -> int | None:

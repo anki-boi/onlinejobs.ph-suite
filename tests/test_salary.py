@@ -74,3 +74,25 @@ def test_starting_at():
 def test_mojibake_dash():
     # real data: en-dash eaten by the site's encoding → '$350$380/mo'
     assert parse_salary("$350$380/mo (Total Package)") == (350.0, 380.0, "USD")
+
+
+def test_decimal_comma_hourly():
+    # real data: "$7,5/hour" is $7.50/hr (PH decimal comma), not $75
+    assert parse_salary("$7,5/hour") == (7.5 * 160, 7.5 * 160, "USD")
+
+
+def test_thousands_comma_range():
+    assert parse_salary("47,000-170,000") == (47000.0, 170000.0, "PHP")
+
+
+def test_parenthetical_aside_dropped():
+    assert parse_salary("$700/month ($175/week, paid weekly)") == (700.0, 700.0, "USD")
+    assert parse_salary("$1,055.00 per month (P60,300 php)") == (1055.0, 1055.0, "USD")
+
+
+def test_parenthetical_kept_when_only_number():
+    assert parse_salary("($2.00-$3.00) hourly") == (320.0, 480.0, "USD")
+
+
+def test_explicit_month_not_hourly_guess():
+    assert parse_salary("$100/month") == (100.0, 100.0, "USD")

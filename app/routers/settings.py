@@ -18,9 +18,17 @@ router = APIRouter(tags=['Settings'])
 @router.get("/api/config")
 def get_config_view():
     """Live config for display — secrets redacted — plus the optional features
-    currently off (drives the dismissable UI banner)."""
+    currently off (drives the dismissable UI banner) and the live FX rates the
+    PHP normalization used (rate + when it was checked)."""
     from app import config as appconfig
-    return {"config": appconfig.redacted(), "features_off": appconfig.features_off()}
+    conn = srv.get_db()
+    raw = settings_repo.get(conn, "fx_metadata", "")
+    try:
+        fx_meta = json.loads(raw) if raw else None
+    except ValueError:
+        fx_meta = None
+    return {"config": appconfig.redacted(), "features_off": appconfig.features_off(),
+            "fx_metadata": fx_meta}
 
 
 @router.post("/api/config/reload")

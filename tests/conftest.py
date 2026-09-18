@@ -42,6 +42,15 @@ def tmp_db(tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _offline_fx(monkeypatch):
+    """Tests run offline: no live FX rates unless a test installs its own stub.
+    A stubbed rate (tests/_set_fx) is applied later, so it wins."""
+    import scraper.salary as salary
+    monkeypatch.setattr(salary, "fetch_fx_to_php",
+                        lambda currencies=None, timeout=10: {})
+
+
+@pytest.fixture(autouse=True)
 def _close_shared_db_conns():
     """W2.1: release thread-shared connections between tests so the registry
     never accumulates handles across the suite."""

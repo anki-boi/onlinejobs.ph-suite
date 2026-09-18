@@ -28,7 +28,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+import threading
+import time
+
 from db.connection import init_db
+from db.repos import jobs as job_repo
 from scraper.skills import fetch_skills, skills_to_db_rows
 from db.repos.skills import upsert_skills
 from scraper.client import OJClient
@@ -66,6 +70,35 @@ def initial_skills_refresh(cfg: dict) -> None:
         print("  (Will retry on first /api/skills/refresh call)")
 
 
+def fx_startup_refresh() -> None:
+    """Fetch LIVE FX rates and normalize every stored salary at boot.
+    No live rate → salaries stay as they are (never approximated, never stale)."""
+    conn = init_db()
+    try:
+        fx = job_repo.renormalize(conn)
+        if fx:
+            print("  [ok] FX rates live: " + ", ".join(f"1 {c} = ₱{v}" for c, v in fx.items()))
+        else:
+            print("  [!] FX: no live rate fetched — PHP-normalized salaries stay unset "
+                  "until a rate can be fetched")
+    except Exception as exc:
+        print(f"  [!] FX refresh failed: {exc}")
+
+
+def fx_daily_loop() -> None:
+    """Daemon: if the server stays up past a day, re-fetch rates and re-normalize
+    (an older-than-a-day rate is treated as not-live)."""
+    import db.connection as dbconn
+    while True:
+        time.sleep(86400)
+        try:
+            fx = job_repo.renormalize(dbconn.get_conn())
+            if fx:
+                print("  [ok] daily FX refresh: " + ", ".join(f"1 {c} = ₱{v}" for c, v in fx.items()))
+        except Exception as exc:
+            print(f"  [!] daily FX refresh failed: {exc}")
+
+
 def _setup_logging() -> None:
     """Rotate log files so they never grow unbounded (5 MB x 3 backups)."""
     logger = logging.getLogger()
@@ -80,6 +113,12 @@ def _setup_logging() -> None:
     )
     handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
     logger.addHandler(handler)
+    # The Windows console is cp1252: '₱' and friends would crash print()
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     # Also stream INFO+ to stderr for interactive runs
     sh = logging.StreamHandler(sys.stderr)
     sh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
@@ -149,6 +188,10 @@ def main():
     cfg = load_config()
     print("  [..] Initialising database...")
     init_db()
+
+    # Live FX rates (no fallback): normalize stored salaries now + daily
+    fx_startup_refresh()
+    threading.Thread(target=fx_daily_loop, daemon=True, name="fx-daily").start()
 
     # Initial skills refresh
     if not args.skip_skills:

@@ -8,7 +8,6 @@ PHP-normalized columns (W4.1), not on the raw mixed-currency text.
 import sqlite3
 
 import db.connection as dbconn
-from app import config as appconfig
 from db.repos import jobs as job_repo
 
 ROWS = [
@@ -21,11 +20,19 @@ ROWS = [
 ]
 
 
+def _set_fx(monkeypatch, fx: dict):
+    """Stub the live FX fetch: fx maps (case-insensitive) currency → rate."""
+    import scraper.salary as salary
+    def fake(currencies=None, timeout=10):
+        return {(c or "").upper(): v for c, v in fx.items()
+                if (c or "").upper() != "PHP"}
+    monkeypatch.setattr(salary, "fetch_fx_to_php", fake)
+
+
 def _fresh(tmp_path, monkeypatch):
     dbpath = tmp_path / "w42.db"
     monkeypatch.setattr(dbconn, "DB_PATH", dbpath)
-    monkeypatch.setattr(appconfig, "_live", {"fx_to_php": {"usd": 58.0}})
-    monkeypatch.setattr(appconfig, "_read_disk", lambda: {"fx_to_php": {"usd": 58.0}})
+    _set_fx(monkeypatch, {"usd": 58.0})
     dbconn.init_db()
     conn = sqlite3.connect(str(dbpath))
     conn.row_factory = sqlite3.Row
@@ -74,7 +81,8 @@ def test_salary_sort_survives_filters(tmp_path, monkeypatch):
     assert [r["title"] for r in rows] == ["A", "B", "E", "D"]  # 60000, 46400, 40600, 20000
 
 
-def test_api_salary_filters(client):
+def test_api_salary_filters(client, monkeypatch):
+    _set_fx(monkeypatch, {"usd": 58.0})
     from db.connection import get_conn
     conn = get_conn()
     for jid, url, title, sal, _ in ROWS:
