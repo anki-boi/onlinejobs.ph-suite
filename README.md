@@ -3,6 +3,20 @@
 Local job-tracking dashboard for [OnlineJobs.ph](https://www.onlinejobs.ph).
 FastAPI + SQLite backend, vanilla-JS frontend, server-sent-events live console.
 
+## Demo
+
+Live scrape in progress — new jobs land in the table as they're found, streamed over SSE:
+
+![Live console mid-scrape](static/img/live-console.png)
+
+Job detail modal: ATS score against your resume, missing skills, and one-click resume tailoring / 1-page CV build:
+
+![Job detail modal](static/img/detail-modal.png)
+
+The dashboard: keyword/category/skill scoping, column funnels, currency-normalized salaries (live FX rates), server-side pagination:
+
+![Dashboard](static/img/dashboard.png)
+
 ## Setup
 
 ```bash
