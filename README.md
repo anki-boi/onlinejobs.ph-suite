@@ -3,6 +3,8 @@
 Local job-tracking dashboard for [OnlineJobs.ph](https://www.onlinejobs.ph).
 FastAPI + SQLite backend, vanilla-JS frontend, server-sent-events live console.
 
+**→ [Why this exists: the ten things that cost time in a job hunt, and what replaced each](PROBLEMS.md)**
+
 ## Demo
 
 Live scrape in progress — new jobs land in the table as they're found, streamed over SSE:
@@ -270,5 +272,5 @@ used to test against a copy of a real database.
 ## License
 
 Copyright (c) 2025–2026 Jeyson Anki. **All rights reserved.** This repository is
-private; no open-source license is granted, and the absence of a `LICENSE`
+public to read, but no open-source license is granted: the absence of a `LICENSE`
 file is deliberate. Do not copy code from here without permission.
