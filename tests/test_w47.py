@@ -78,5 +78,10 @@ def test_min_ats_subquery_indexed(tmp_path, monkeypatch):
     plan = _explain(conn, "SELECT * FROM jobs WHERE EXISTS "
                           "(SELECT 1 FROM ats_scores a WHERE a.job_id = jobs.id "
                           "AND a.total >= 50) ORDER BY date_found DESC, id DESC LIMIT 50")
-    # the per-row subquery must stay index-backed (outer scan is inherent)
-    assert "a EXISTS USING INDEX" in plan
+    # the per-row subquery must stay index-backed (outer scan is inherent).
+    # SQLite's wording for this plan is not stable here — across runs on the same
+    # interpreter it prints "EXISTS USING INDEX", "USING INDEX", or "EXISTS"
+    # wedged in between — so assert the property, not the phrasing: the
+    # subquery is reached by SEARCH and ats_scores is never a full SCAN.
+    assert "SEARCH a" in plan
+    assert "SCAN a" not in plan
