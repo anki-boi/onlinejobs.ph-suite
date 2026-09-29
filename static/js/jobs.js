@@ -34,7 +34,7 @@ function buildJobsParams(perPage) {
   if (sMin !== '') p.set('salary_min_monthly', sMin);   // F9: 0 is a real bound
   if (sMax !== '') p.set('salary_max_monthly', sMax);
   if (sCur) p.set('salary_currency', sCur);
-  if (state.minAts) p.set('min_ats', state.minAtsValue || 50);
+  if (state.minAts) p.set('min_fit', state.minAtsValue ?? 20);  // P1: fit, not total
   if (state.sort) { p.set('sort', state.sort); p.set('order', state.order); }
   return p;
 }
@@ -100,6 +100,13 @@ function jobRowHtml(j) {
         ? `<span class="status-badge status-Hidden hidden-by-filter" title="Auto-hidden by keyword rules — was ${esc(j.pre_filter_status||'New')}">Hidden · auto</span>`
         : `<span class="status-badge status-Hidden" title="Hidden by you">Hidden</span>`)
     : `<span class="status-badge status-${j.status}">${j.status}</span>`;
+  // P1: the fit half of the ATS score (skills + keywords, /60). The 40 hygiene
+  // points are the same number on every row, so they don't belong in a column
+  // whose whole job is "is this worth applying to" — they stay in the tooltip.
+  const fit = (j.ats_fit === null || j.ats_fit === undefined) ? null : j.ats_fit;
+  const fitHtml = fit === null
+    ? '<span class="text-muted" title="Not scored yet">—</span>'
+    : `<span class="fit-chip ${fit >= 40 ? 'fit-hi' : fit >= 20 ? 'fit-mid' : 'fit-lo'}" title="Fit ${fit}/60 (skills+keywords) · total ${j.ats_total}/100 against ${esc(j.ats_profile || 'best profile')}">${fit}</span>`;
   // F2: empty string, not "0" — "0" is a truthy string and used to hide every row.
   return `<tr data-id="${j.id}" data-repost="${j.repost_of||''}" data-title="${esc(j.title||'')}" tabindex="0" class="${j.status==='Hidden'?'hidden-row':''}">
     <td><span class="scrape-dot ${dot}" title="${dotTitle}"></span></td>
@@ -110,6 +117,7 @@ function jobRowHtml(j) {
     <td><span class="work-type ${wtCls}">${wt}</span></td>
     <td class="cell-mono">${esc(j.salary||'')||'<span class="text-muted">—</span>'}${salChip}</td>
     <td class="cell-mono">${esc(j.hours_per_week||'')||'<span class="text-muted">—</span>'}</td>
+    <td class="cell-mono">${fitHtml}</td>
   </tr>`;
 }
 

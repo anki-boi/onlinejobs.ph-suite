@@ -77,6 +77,10 @@ def set_schedule(body: ScheduleUpdate):
         if not 1 <= body.interval_hours <= 24:
             raise HTTPException(400, "interval_hours must be 1-24")
         settings_repo.set(conn, "auto_run_interval_hours", str(body.interval_hours))
+    if body.interval_hours is not None or body.enabled is True:
+        # B14: an interval change (or switching the scheduler back on) must move
+        # next_run, or the app keeps advertising the old schedule.
+        scheduler.recompute_next_run(conn)
     return get_schedule()
 
 

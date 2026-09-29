@@ -3,7 +3,14 @@ resumes/ats.py — deterministic ATS-style scoring. Deliberately NOT an LLM:
 recruiter-side ATS first pass is keyword/structure based, and a rule-based
 score can't hallucinate. Scores a resume text against a specific job.
 
-Scale (100): skills 40 · keywords 20 · format 25 · completeness 15.
+Scale (100) — and it is two scores wearing one number (P1):
+
+    fit      = skills 40 + keywords 20   → /60, the only job-dependent half
+    hygiene  = format 25 + completeness 15 → /40, identical for every job
+
+The hygiene half is a property of the resume, so on a given profile it is a
+constant (mean total 35.2 with a max of 75 was mostly that constant). Anything
+that asks "is this job worth applying to?" must compare `fit`, not `total`.
 """
 
 import json
@@ -114,6 +121,10 @@ def score_resume(text: str, job: dict) -> dict:
     out["breakdown"]["completeness"] = c
 
     out["total"] = sum(out["breakdown"].values())
+    # P1: the two halves, named. `fit` is what changes from job to job; `hygiene`
+    # is the resume's own shape and is the same number on every row.
+    out["fit"] = out["breakdown"]["skills"] + out["breakdown"]["keywords"]
+    out["hygiene"] = out["breakdown"]["format"] + out["breakdown"]["completeness"]
 
     # ── rule-generated suggestions ──
     if missing:

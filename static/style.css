@@ -238,6 +238,7 @@ header::before {
 .col-salary  { width: 110px; }
 .col-source  { width: 100px; }
 .col-hours    { width: 70px; }
+.col-ats      { width: 52px; }
 .col-actions  { width: 60px; }
 
 /* ── Excel-style column headers: click to sort, ▼ to filter ── */
@@ -507,6 +508,17 @@ th.sorted-desc .th-label::after { content: '▼'; }
 .salary-chip {
   margin-top: 3px; font-family: var(--mono); font-size: 0.72rem;
   color: var(--accent);
+}
+
+/* P1: the fit half of the ATS score (skills + keywords, /60). Colour is the only
+   signal — the number itself is meaningless without the tooltip's breakdown. */
+.fit-chip { font-family: var(--mono); font-size: 0.74rem; font-weight: 600; }
+.fit-hi  { color: var(--green); }
+.fit-mid { color: var(--accent2); }
+.fit-lo  { color: var(--text3); }
+.fit-control { display: inline-flex; align-items: center; gap: 6px; }
+.fit-control input[type=range] {
+  width: 90px; accent-color: var(--accent); cursor: pointer;
 }
 
 /* W1.4: dismissable "optional features off" config banner */

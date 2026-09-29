@@ -19,6 +19,7 @@ from db.migrations.v5_salary_currency import step as _v5
 from db.migrations.v6_ats_scores import step as _v6
 from db.migrations.v7_perf_indexes import step as _v7
 from db.migrations.v8_company_cleanup import step as _v8
+from db.migrations.v9_ats_fit import step as _v9
 
 log = logging.getLogger(__name__)
 
@@ -132,6 +133,7 @@ MIGRATIONS: dict[int, callable] = {
     6: _v6,
     7: _v7,
     8: _v8,
+    9: _v9,
 }
 
 
@@ -255,8 +257,9 @@ def main(argv: list[str] | None = None) -> int:
         if not steps:
             print("up to date - nothing to do")
         for v in steps:
-            doc = MIGRATIONS[v].__doc__ or ""
-            print(f"  would apply v{v}: {doc.strip().splitlines()[0]}")
+            doc = (MIGRATIONS[v].__doc__ or "").strip()
+            first = doc.splitlines()[0] if doc else "(no description)"
+            print(f"  would apply v{v}: {first}")
         conn.close()
         return 0
 

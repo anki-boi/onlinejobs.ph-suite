@@ -49,6 +49,13 @@ function init() {
   $('#filter-hidden').addEventListener('change', e=>{state.includeHidden=e.target.checked;loadJobs();});
   $('#filter-reposts').addEventListener('change', e=>{state.hideReposts=e.target.checked;applyVisibleFilter();});
   $('#filter-min-ats').addEventListener('change', e=>{state.minAts=e.target.checked;loadJobs();});
+  // P1: the ATS floor is a slider on `fit` (0-60), not a hard-coded 50/100 that
+  // hid nearly every job. Dragging re-queries; the number is echoed next to it.
+  const fitSlider = $('#filter-min-fit'), fitValue = $('#fit-value');
+  const syncFit = ()=>{ state.minAtsValue = Number(fitSlider.value)||0;
+                        if (fitValue) fitValue.textContent = state.minAtsValue; };
+  fitSlider.addEventListener('input', ()=>{ syncFit(); if (state.minAts) loadJobs(); });
+  syncFit();
   // F9: money filters react while typing (debounced like the search box) — the old
   // `change` listener only fired on blur/Enter, so typing a bound did nothing.
   let svt;

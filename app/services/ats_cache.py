@@ -31,12 +31,12 @@ def ensure_fresh(conn, key: str, masters: dict, job_rows, job_dict) -> None:
         if best is None:
             continue
         name, sc = best
-        out.append((r["id"], name, sc["total"], now))
+        out.append((r["id"], name, sc["total"], sc.get("fit", 0), now))
 
     conn.execute("DELETE FROM ats_scores")
     conn.executemany(
-        "INSERT INTO ats_scores (job_id, profile, total, updated_at) "
-        "VALUES (?, ?, ?, ?)",
+        "INSERT INTO ats_scores (job_id, profile, total, fit, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
         out,
     )
     conn.execute(

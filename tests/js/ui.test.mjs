@@ -24,11 +24,13 @@ const PAGE = {
       posted_date: '2026-09-01 08:00:00', salary: '$800/mo', salary_monthly_min: 47000,
       salary_monthly_max: 47000, salary_currency: 'USD', hours_per_week: '40',
       skills: 'Excel, Data Entry, Email, Notepad, Extra', status: 'New',
-      scrape_status: 'Open', filter_hidden: 0, repost_of: 90 },
+      scrape_status: 'Open', filter_hidden: 0, repost_of: 90,
+      ats_fit: 45, ats_total: 80, ats_profile: 'master' },
     ...Array.from({ length: 49 }, (_, i) => ({
       id: 200 + i, title: `Job ${i}`, company: 'Company', work_type: 'Any',
       posted_date: '2026-09-02 08:00:00', salary: '', hours_per_week: '',
       skills: 'Excel', status: 'New', scrape_status: '', repost_of: null,
+      ats_fit: null, ats_total: null, ats_profile: null,
     })),
   ],
   page: 1, per_page: 50, total: 1232, next_cursor: '2',
@@ -56,16 +58,20 @@ const ROUTES = {
 let fetched = [];
 let M = null;                       // the loaded modules
 
+// The route table every test fetches against. afterEach re-installs it because
+// F16 swaps in a streaming stub that has no json().
+function routeFetch(url) {
+  const path = String(url).split('?')[0];
+  fetched.push(String(url));
+  const body = ROUTES[path]
+    ?? (/^\/api\/jobs\/\d+$/.test(path)
+          ? { ...PAGE.items.find(i => i.id === +path.split('/').pop()) ?? PAGE.items[0], history: [] }
+          : { ok: true });
+  return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
+}
+
 before(async () => {
-  globalThis.fetch = async (url) => {
-    const path = String(url).split('?')[0];
-    fetched.push(String(url));
-    const body = ROUTES[path]
-      ?? (/^\/api\/jobs\/\d+$/.test(path)
-            ? { ...PAGE.items.find(i => i.id === +path.split('/').pop()) ?? PAGE.items[0], history: [] }
-            : { ok: true });
-    return { ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) };
-  };
+  globalThis.fetch = routeFetch;
   globalThis.EventSource = class { addEventListener() {} close() {} };
   const Notif = class {
     static permission = 'granted';
@@ -93,9 +99,10 @@ before(async () => {
 });
 
 afterEach(() => {
+  globalThis.fetch = routeFetch;
   const s = M.core.state;
   s.search = ''; s.status = ''; s.skills = []; s.categories = [];
-  s.includeHidden = false; s.hideReposts = false; s.minAts = false;
+  s.includeHidden = false; s.hideReposts = false; s.minAts = false; s.minAtsValue = 20;
   s.colFilters = { status: [], work_type: [], scrape: [], title: '', company: '',
                    posted: { from: '', to: '' }, salary: '', hours: '' };
   s.hasSalaryOnly = false; s.sort = ''; s.order = 'desc';
@@ -199,4 +206,33 @@ test('F16 — a stream that ends without a done event still re-enables the butto
   });
   await M.run.streamSSE('/api/pipeline/run', {});
   assert.equal(document.querySelector('#btn-harvest').disabled, false);
+});
+test('P1 — the fit slider sends min_fit, not a hard-coded ATS of 50', async () => {
+  const box = document.querySelector('#filter-min-ats');
+  const slider = document.querySelector('#filter-min-fit');
+  assert.ok(box && slider, 'the ATS checkbox kept its slider');
+  box.checked = true;
+  box.dispatchEvent(new window.Event('change', { bubbles: true }));
+  slider.value = '40';
+  slider.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await M.jobs.loadJobs();
+  assert.match(lastJobsUrl(), /[?&]min_fit=40(&|$)/, 'the floor travels as fit/60');
+  assert.doesNotMatch(lastJobsUrl(), /min_ats=/, 'the 100-point total is no longer the filter');
+  assert.equal(document.querySelector('#fit-value').textContent, '40', 'the number is echoed');
+});
+
+test('P1 — the table shows the score it filters on', async () => {
+  await M.jobs.loadJobs();
+  const scored = rows()[0].querySelector('.fit-chip');
+  assert.ok(scored, 'a scored row renders its fit');
+  assert.equal(scored.textContent.trim(), '45');
+  assert.match(scored.title, /total 80\/100/, 'the tooltip carries the total it hides');
+  const unscored = rows().find(r => r.dataset.id === '200').querySelector('.fit-chip, .text-muted');
+  assert.equal(unscored.textContent.trim(), '—', 'an unscored job says so instead of 0');
+});
+
+test('P1 — sorting by Fit asks the server, not the page', async () => {
+  document.querySelector('th[data-col="ats"]').click();
+  await M.jobs.loadJobs();
+  assert.match(lastJobsUrl(), /[?&]sort=ats(&|$)/);
 });

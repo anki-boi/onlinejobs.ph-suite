@@ -141,12 +141,26 @@ def _find_repost_origin(conn, row_id: int, title: str, employer_id: int | None =
 # B14: `skills` dropped — sorting by a comma-joined tag string is meaningless.
 SORTABLE = {
     "title", "company", "salary", "location", "hours_per_week", "work_type",
-    "posted_date", "date_updated", "date_found", "status", "scrape_status",
+    "posted_date", "date_updated", "date_found", "status", "scrape_status", "ats",
 }
 
 # B14: the order a job actually moves through, used when sorting by status.
 STATUS_ORDER = ["New", "Interested", "Applied", "Interviewing", "Offer",
                 "Hired", "Rejected", "Hidden"]
+
+def _ats_columns(conn: sqlite3.Connection) -> set:
+    """Columns the materialized score cache actually has.
+
+    A pre-W4.3 database has no ats_scores at all and a pre-v9 one has no `fit`,
+    and get_jobs runs against both (migrations add them on boot, tests build
+    legacy shapes directly). Asking once per query keeps the SELECT honest
+    instead of throwing `no such column: fit` at a half-migrated DB."""
+    if not conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ats_scores'"
+    ).fetchone():
+        return set()
+    return {r[1] for r in conn.execute("PRAGMA table_info(ats_scores)")}
+
 
 def _split_multi(value: str | None) -> list[str]:
     """'a,b, c' → ['a','b','c'] (stripped, non-empty)."""
@@ -178,6 +192,7 @@ def get_jobs(
     posted_to: str | None = None,
     has_salary: bool = False,
     min_ats: int = 0,
+    min_fit: int = 0,
     salary_min_monthly: float | None = None,
     salary_max_monthly: float | None = None,
     salary_currency: str | None = None,
@@ -194,6 +209,7 @@ def get_jobs(
     """
     clauses: list[str] = []
     params: list = []
+    acols = _ats_columns(conn)
 
     if not include_hidden:
         clauses.append("status != 'Hidden'")
@@ -280,12 +296,23 @@ def get_jobs(
 
     # W4.3: best-profile ATS at SQL level (materialized ats_scores, W4.3) so
     # `total` is a truthful global count, not a per-page Python filter.
-    if min_ats:
+    if min_ats and "total" in acols:
         clauses.append(
             "EXISTS (SELECT 1 FROM ats_scores a "
             "WHERE a.job_id = jobs.id AND a.total >= ?)"
         )
         params.append(min_ats)
+
+    # P1 (audit): the job-worthiness floor is `fit` — skills + keywords out of 60.
+    # `total` adds 40 points of resume hygiene that are identical for every row,
+    # so "ATS >= 50" was really asking "is my resume well-formed?" and hid nearly
+    # the whole table.
+    if min_fit and "fit" in acols:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM ats_scores a "
+            "WHERE a.job_id = jobs.id AND a.fit >= ?)"
+        )
+        params.append(min_fit)
 
     if search:
         like = f"%{search}%"
@@ -329,14 +356,34 @@ def get_jobs(
                 f"WHEN '{s}' THEN {i}" for i, s in enumerate(STATUS_ORDER)
             ) + " ELSE 99 END"
             order_by = f"{rank} {order_sql}"
+        elif sort == "ats" and "fit" in acols:
+            # P1: sort on fit, the job-dependent half. Unscored jobs sink (-1),
+            # in both directions — SQLite parks a bare NULL at the top of a DESC.
+            order_by = ("COALESCE((SELECT fit FROM ats_scores a "
+                        "WHERE a.job_id = jobs.id ORDER BY total DESC LIMIT 1), -1) "
+                        + order_sql)
         else:
             order_by = f"{sort} {order_sql}"
     else:
         order_by = "date_found DESC"
 
     offset = (page - 1) * per_page
+    # The best-profile score travels with each row: the table showed no ATS at all
+    # while filtering on it, which is P1's other half — a filter the user can't see
+    # the input for. Correlated subqueries keep one row per job even if an old
+    # cache left several profiles behind.
+    def _score(col, alias):
+        if col not in acols:
+            return f"NULL AS {alias}"
+        return (f"(SELECT {col} FROM ats_scores a WHERE a.job_id = jobs.id "
+                f"ORDER BY a.total DESC LIMIT 1) AS {alias}")
+
     rows = conn.execute(
-        f"SELECT * FROM jobs {where} ORDER BY {order_by}, id DESC LIMIT ? OFFSET ?",
+        f"SELECT jobs.*, "
+        f"{_score('total', 'ats_total')}, "
+        f"{_score('fit', 'ats_fit')}, "
+        f"{_score('profile', 'ats_profile')} "
+        f"FROM jobs {where} ORDER BY {order_by}, id DESC LIMIT ? OFFSET ?",
         params + [per_page, offset],
     ).fetchall()
 
@@ -635,10 +682,12 @@ def get_stats(conn: sqlite3.Connection) -> dict:
     ).fetchone()[0]
 
     # Active-pipeline jobs whose follow-up date is today or in the past.
+    # P7 (audit): the old allow-list forgot 'New' and 'Offer', so a job you sat on
+    # since it landed, or one you're waiting on an offer for, never counted.
     stats["follow_ups_due"] = conn.execute(
         "SELECT COUNT(*) FROM jobs WHERE follow_up IS NOT NULL AND follow_up != '' "
         "AND date(follow_up) <= date('now') "
-        "AND status IN ('Interested', 'Applied', 'Interviewing')"
+        "AND status NOT IN ('Hidden', 'Rejected', 'Hired')"
     ).fetchone()[0]
 
     return stats

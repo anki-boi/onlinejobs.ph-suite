@@ -89,9 +89,13 @@ def _masters() -> dict:
 def _ats_cache_key(conn) -> str:
     """Invalidation key for the materialized ATS cache (W4.3): any in-place
     score-field change bumps the jobs version counter; masters.json mtime
-    covers resume-side changes."""
+    covers resume-side changes.
+
+    The leading "v2" is the scoring formula's version (P1 added the fit/hygiene
+    split): bump it whenever the formula changes and every existing cache
+    rebuilds on the next request instead of serving stale totals."""
     mtime = MASTERS_PATH.stat().st_mtime if MASTERS_PATH.exists() else 0
-    return f"{job_repo.get_jobs_version(conn)}:{mtime}"
+    return f"v2:{job_repo.get_jobs_version(conn)}:{mtime}"
 
 
 # Default UA — a missing/empty config value must never override it with "".

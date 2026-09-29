@@ -211,8 +211,10 @@
         <label class="checkbox-label" title="Hide duplicate listings — same title posted again by the same employer">
           <input type="checkbox" id="filter-reposts"> Hide reposts
         </label>
-        <label class="checkbox-label" title="Hide jobs your best-fitting resume scores below 50/100 on (deterministic ATS, all master profiles)">
-          <input type="checkbox" id="filter-min-ats"> ATS ≥ 50
+        <label class="checkbox-label fit-control" title="Only jobs your best-fitting resume actually fits. Fit = matched skills + keywords out of 60; the other 40 points are resume hygiene (format, completeness) and are identical for every job, so they were never a reason to hide one.">
+          <input type="checkbox" id="filter-min-ats"> Fit ≥
+          <input type="range" id="filter-min-fit" min="0" max="60" step="5" value="20" aria-label="Minimum fit score out of 60">
+          <span class="cell-mono" id="fit-value">20</span>/60
         </label>
       </div>
       <div class="toolbar-right">
@@ -236,10 +238,11 @@
             <th class="sortable col-type" data-col="work_type"><span class="th-in"><span class="th-label">Type</span><span class="th-funnel" data-filter="work_type" title="Filter">▼</span></span></th>
             <th class="sortable col-salary" data-col="salary"><span class="th-in"><span class="th-label">Salary</span><span class="th-funnel" data-filter="salary" title="Filter">▼</span></span></th>
             <th class="sortable col-hours" data-col="hours_per_week"><span class="th-in"><span class="th-label">Hours</span><span class="th-funnel" data-filter="hours" title="Filter">▼</span></span></th>
+            <th class="sortable col-ats" data-col="ats"><span class="th-in"><span class="th-label">Fit</span></span></th>
           </tr>
         </thead>
         <tbody id="jobs-tbody">
-          <tr class="empty-row"><td colspan="8">Loading...</td></tr>
+          <tr class="empty-row"><td colspan="9">Loading...</td></tr>
         </tbody>
       </table>
     </div>

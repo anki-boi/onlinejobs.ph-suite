@@ -142,6 +142,18 @@ def is_running() -> bool:
     return pipeline_lock.locked()
 
 
+def recompute_next_run(conn) -> None:
+    """B14: schedule the next auto-run from the CURRENT interval.
+
+    Saving a new interval used to leave next_run wherever the last run put it, so
+    the UI could read "next run in 4h" under a 1-hour setting — and turning the
+    scheduler back on after a long pause inherited a stale timestamp too."""
+    hours = int(settings_repo.get(conn, "auto_run_interval_hours",
+                                  str(DEFAULT_INTERVAL_HOURS))
+                or DEFAULT_INTERVAL_HOURS)
+    settings_repo.set(conn, "next_run", str(time.time() + hours * 3600))
+
+
 def tick(client_factory=None) -> None:
     """One scheduler heartbeat: due? enabled? free? → run_once."""
     conn = _defaults_conn()
@@ -167,10 +179,8 @@ def tick(client_factory=None) -> None:
             return
         if not settings_repo.acquire_instance_lock(conn):
             return  # lost the race to another process — retry next tick
-        hours = int(settings_repo.get(conn, "auto_run_interval_hours", str(DEFAULT_INTERVAL_HOURS))
-                    or DEFAULT_INTERVAL_HOURS)
         settings_repo.set(conn, "last_run", time.strftime("%Y-%m-%d %H:%M:%S"))
-        settings_repo.set(conn, "next_run", str(time.time() + hours * 3600))
+        recompute_next_run(conn)
         settings_repo.set(conn, "last_error", "")
         if client_factory is None:
             from app.server import get_client  # local import: server imports us

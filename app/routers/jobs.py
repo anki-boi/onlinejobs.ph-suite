@@ -70,6 +70,7 @@ def list_jobs(request: Request,
     salary_max_monthly: float | None = None,   # job's min (PHP/month) <= this
     salary_currency: str | None = None,        # comma-separated, e.g. "USD,PHP"
     min_ats: int = 0,  # hide jobs whose best-profile ATS score is below this
+    min_fit: int = 0,  # P1: hide jobs whose fit (skills+keywords, /60) is below this
 ):
 
     """List saved jobs with filters. Paginated: {items, page, per_page, total, next_cursor}; per_page max 500 (bigger is 400); repeat GETs with If-None-Match get 304 until data or query changes."""
@@ -96,6 +97,7 @@ def list_jobs(request: Request,
         posted_from=posted_from, posted_to=posted_to,
         has_salary=has_salary,
         min_ats=min_ats,
+        min_fit=min_fit,
         salary_min_monthly=salary_min_monthly,
         salary_max_monthly=salary_max_monthly,
         salary_currency=salary_currency,
