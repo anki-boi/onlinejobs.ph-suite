@@ -174,6 +174,14 @@ function connectEvents() {
     if (st) st.textContent = `last run: +${d.inserted||0} new · ${d.closed||0} closed · ${d.errors||0} err`;
     loadStats(); loadJobs();
   });
+  // F18: the reset endpoint publishes jobs_reset; nothing listened, so the table
+  // kept showing 1,232 rows over an empty database until something else refreshed.
+  es.addEventListener('jobs_reset', (e) => {
+    let d = {}; try { d = JSON.parse(e.data); } catch (_) {}
+    toast(`Job table cleared (${d.deleted_jobs || 0} rows)`, 'info');
+    state.total = 0;
+    loadJobs(); loadStats(); loadResumeStatus();
+  });
   es.onerror = () => { syncAutoRunUI(); };
 }
 

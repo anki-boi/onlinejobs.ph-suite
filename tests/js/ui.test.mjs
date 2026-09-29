@@ -72,7 +72,13 @@ function routeFetch(url) {
 
 before(async () => {
   globalThis.fetch = routeFetch;
-  globalThis.EventSource = class { addEventListener() {} close() {} };
+  // Record every EventSource so a test can fire a server event by hand (F18).
+  globalThis.__ES = [];
+  globalThis.EventSource = class {
+    constructor(url) { this.url = url; this.handlers = {}; globalThis.__ES.push(this); }
+    addEventListener(name, fn) { this.handlers[name] = fn; }
+    close() {}
+  };
   const Notif = class {
     static permission = 'granted';
     static requestPermission() { return Promise.resolve('granted'); }
@@ -313,4 +319,61 @@ test('B11 — the CSV URL carries the filters on screen', async () => {
   assert.match(url, /\/api\/jobs\/export\?.*search=bookkeeper/);
   assert.match(url, /hide_reposts=1/);
   assert.match(url, /min_fit=35/);
+});
+
+test('F14 — the funnel triggers are real buttons with names', () => {
+  const funnels = [...document.querySelectorAll('.th-funnel')];
+  assert.ok(funnels.length >= 5, 'every sortable column keeps its funnel');
+  assert.ok(funnels.every(b => b.tagName === 'BUTTON'), 'spans cannot be tabbed to');
+  assert.ok(funnels.every(b => b.getAttribute('aria-label')), 'each one says what it filters');
+});
+
+test('F14 — the drawer is a modal: focus goes in, and comes back out', async () => {
+  await M.jobs.loadJobs();
+  const row = rows().find(r => r.dataset.id === '100') || rows()[0];
+  row.focus();                       // a keyboard user activates the row they're on
+  await M.resume.openDetail(row.dataset.id);
+  const panel = document.querySelector('#detail-panel');
+  assert.equal(panel.getAttribute('aria-modal'), 'true');
+  assert.equal(panel.getAttribute('role'), 'dialog');
+  assert.equal(document.activeElement.id, 'detail-close', 'focus enters the dialog');
+  M.resume.closeDetail();
+  assert.equal(document.activeElement.dataset.id, row.dataset.id, 'focus returns to the row');
+});
+
+test('F14 — Escape closes the popup, not the drawer behind it', async () => {
+  await M.resume.openDetail(100);
+  const th = document.querySelector('th[data-col="status"]');
+  M.jobs.openColFilter('status', th);
+  assert.ok(M.jobs.colFilterOpen(), 'the filter popup is open');
+  document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  assert.notEqual(document.querySelector('#detail-panel').className.indexOf('open'), -1,
+                  'the drawer survives one Escape');
+});
+
+test('F13 — the phone breakpoint exists and the sidebar collapses behind a button', () => {
+  const css = readFileSync(join(ROOT, 'static', 'style.css'), 'utf8');
+  assert.match(css, /@media\s*\(max-width:\s*900px\)/, 'there is a breakpoint now');
+  assert.match(css, /100dvh/, 'dvh, not the mobile-viewport 100vh bug');
+  assert.match(css, /position:\s*sticky;\s*left:\s*0/, 'the first column stays pinned while scrolling');
+  document.querySelector('#btn-sidebar').click();
+  assert.ok(document.querySelector('#sidebar').classList.contains('collapsed'));
+  assert.equal(document.querySelector('#btn-sidebar').getAttribute('aria-expanded'), 'false');
+  document.querySelector('#btn-sidebar').click();
+  assert.equal(document.querySelector('#sidebar').classList.contains('collapsed'), false);
+});
+
+test('F10 — an empty activity log is not a 250px empty box', () => {
+  const css = readFileSync(join(ROOT, 'static', 'style.css'), 'utf8');
+  assert.match(css, /\.console:empty\s*\{\s*display:\s*none/, 'idle console collapses to a bar');
+});
+
+test('F18 — jobs_reset refreshes the table instead of leaving stale rows', async () => {
+  const es = globalThis.__ES.at(-1);
+  assert.ok(es.handlers.jobs_reset, 'the SSE event has a listener');
+  fetched = [];
+  es.handlers.jobs_reset({ data: JSON.stringify({ deleted_jobs: 1232 }) });
+  await tick();
+  assert.ok(fetched.some(u => u.startsWith('/api/jobs?')), 'the table reloaded');
+  assert.match(document.querySelector('#toast').textContent, /cleared/i, 'and said so');
 });

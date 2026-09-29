@@ -289,6 +289,11 @@ function closeColFilter() {
   filterPop = null;
 }
 
+// F14: Escape must close the topmost thing only. The column-filter popup has its
+// own Escape handler; without this the global one closed the drawer at the same
+// time, so one keypress threw away both the filter you were editing and the job.
+function colFilterOpen() { return !!filterPop; }
+
 function openColFilter(col, th) {
   closeColFilter();
   const values = COL_VALUES[col];
@@ -370,4 +375,4 @@ function openColFilter(col, th) {
   filterPop.querySelector('.fp-text')?.focus();
 }
 
-export { buildJobsParams, loadJobs, renderJobs, renderPager, insertStubRow, applyVisibleFilter, exportCSV, toggleSort, updateSortIndicators, updateFunnelIndicators, closeColFilter, openColFilter, renderResultCount };
+export { buildJobsParams, loadJobs, renderJobs, renderPager, insertStubRow, applyVisibleFilter, exportCSV, toggleSort, updateSortIndicators, updateFunnelIndicators, closeColFilter, openColFilter, renderResultCount, colFilterOpen };

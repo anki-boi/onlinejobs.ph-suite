@@ -552,3 +552,47 @@ th.sorted-desc .th-label::after { content: '▼'; }
 .pager button { padding: 2px 8px; border: 1px solid var(--border, #444); border-radius: 4px; background: var(--bg2, #222); color: inherit; cursor: pointer; }
 .pager button:disabled { opacity: .4; cursor: default; }
 tr.vs-spacer td { padding: 0; }
+
+/* ══ F13 / F14 / F10 (audit): the phone pass and the a11y basics ═════════════
+   One breakpoint is enough for this app: below it the sidebar becomes a drawer
+   behind a Menu button and the table scrolls sideways with the status column
+   pinned. `dvh` because `100vh` on mobile Safari/Chrome is taller than the
+   visible viewport — the URL bar eats the bottom of the page. */
+.layout { height: calc(100dvh - 52px); }
+.sidebar-toggle { display: none; }
+.console:empty { display: none; }   /* F10: an empty log is not a 250px empty box */
+
+@media (max-width: 900px) {
+  html, body { overflow: auto; }
+  .layout { flex-direction: column; height: auto; min-height: calc(100dvh - 52px); }
+  .content { order: 1; overflow: visible; }
+  .sidebar {
+    width: 100%; order: 2; border-right: none;
+    border-top: 1px solid var(--border); overflow-y: visible;
+  }
+  .sidebar.collapsed { display: none; }
+  .sidebar-toggle { display: inline-flex; align-items: center; }
+  .toolbar-left { flex-wrap: wrap; gap: 6px; }
+  .toolbar-right { flex-wrap: wrap; }
+  .table-wrap { overflow: auto; -webkit-overflow-scrolling: touch; }
+  .jobs-table { min-width: 760px; }
+  /* the status column is how you know which row you're looking at while scrolling */
+  .jobs-table th:first-child, .jobs-table td:first-child {
+    position: sticky; left: 0; z-index: 3; background: var(--bg2);
+  }
+  .jobs-table thead th:first-child { z-index: 11; background: var(--bg3); }
+  .detail-panel { width: 100%; max-width: 100%; height: calc(100dvh - 52px); }
+}
+
+/* F14: the funnel triggers were <span>s — untabbable, unannounced. As buttons
+   they keep the old look but get keyboard and a name. */
+.th-funnel {
+  appearance: none; -webkit-appearance: none;
+  background: none; border: 0; padding: 0 2px; margin: 0;
+  color: inherit; font: inherit; cursor: pointer; line-height: 1;
+}
+.th-funnel:hover { color: var(--accent2); }
+
+/* F14: everything focusable shows where it is. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+tr[data-id]:focus-visible { outline-offset: -2px; }

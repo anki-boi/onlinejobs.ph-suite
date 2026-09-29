@@ -1,6 +1,6 @@
 /* W6.1: entry point — wires events, boots the app (index.html loads this as type="module") */
 import { state, $, api, toast, log, consoleEl, currentJob, detailOverlay, tbody } from './js/core.js';
-import { loadJobs, exportCSV, toggleSort, openColFilter, updateFunnelIndicators } from './js/jobs.js';
+import { loadJobs, exportCSV, toggleSort, openColFilter, updateFunnelIndicators, colFilterOpen } from './js/jobs.js';
 import { loadStats, loadConfigBanner } from './js/stats.js';
 import { runPipeline, runCheck, syncAutoRunUI, connectEvents } from './js/run.js';
 import { addChip, applyFilters, restoreFilters, saveScrapeScope, resetAll, loadSavedKeywords, loadScrapeScope, loadCategories, loadSkills, renderCats } from './js/filters.js';
@@ -97,7 +97,23 @@ function init() {
   // Detail
   $('#detail-close').addEventListener('click', closeDetail);
   detailOverlay.addEventListener('click', closeDetail);
-  document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeDetail(); });
+  // F14: Escape closes the topmost layer only. A column-filter popup is on top of
+  // the drawer, and its own handler deals with it — the old global listener closed
+  // both at once, losing the filter you were mid-edit on.
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    if (colFilterOpen()) return;          // the popup's own handler closes it
+    closeDetail();
+  });
+
+  // F13: on a phone the sidebar is a drawer behind this button.
+  const sidebar = $('#sidebar'), sbToggle = $('#btn-sidebar');
+  if (sbToggle) {
+    sbToggle.addEventListener('click', () => {
+      const collapsed = sidebar.classList.toggle('collapsed');
+      sbToggle.setAttribute('aria-expanded', String(!collapsed));
+    });
+  }
 
   $('#detail-status-select').addEventListener('change', async e=>{
     if(!currentJob||!e.target.value) return;

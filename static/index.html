@@ -22,7 +22,7 @@
 <div class="layout">
 
   <!-- ═══ Sidebar ═══ -->
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar">
 
     <!-- Panel: Find new jobs (scrape scope) -->
     <div class="panel">
@@ -187,13 +187,18 @@
     <div class="console-wrap" id="console-wrap">
       <div class="console-header">
         <span>Activity</span>
-        <button class="console-close" id="console-close">x</button>
+        <!-- F10: "x" clears the buffer, which collapses the box to a one-line bar
+             (the body hides while :empty). Run output re-opens it by itself. -->
+        <button class="console-close" id="console-close" aria-label="Clear the activity log">x</button>
       </div>
       <div class="console" id="console"></div>
     </div>
 
     <div class="toolbar">
       <div class="toolbar-left">
+        <!-- F13: on a phone the sidebar becomes a drawer behind this button -->
+        <button class="btn btn-ghost btn-sm sidebar-toggle" id="btn-sidebar"
+                aria-expanded="true" aria-controls="sidebar">Menu</button>
         <input type="text" id="search-box" class="input search-input" placeholder="Search title, company, description…" autocomplete="off">
         <select class="select" id="filter-status" title="Workflow status">
           <option value="">All statuses</option>
@@ -239,13 +244,13 @@
         <thead>
           <tr>
             <th class="col-scrape"></th>
-            <th class="sortable col-status" data-col="status"><span class="th-in"><span class="th-label">Status</span><span class="th-funnel" data-filter="status" title="Filter">▼</span></span></th>
-            <th class="sortable col-title" data-col="title"><span class="th-in"><span class="th-label">Title</span><span class="th-funnel" data-filter="title" title="Filter">▼</span></span></th>
-            <th class="sortable col-company" data-col="company"><span class="th-in"><span class="th-label">Company</span><span class="th-funnel" data-filter="company" title="Filter">▼</span></span></th>
-            <th class="sortable col-posted" data-col="posted_date"><span class="th-in"><span class="th-label">Posted</span><span class="th-funnel" data-filter="posted" title="Filter">▼</span></span></th>
-            <th class="sortable col-type" data-col="work_type"><span class="th-in"><span class="th-label">Type</span><span class="th-funnel" data-filter="work_type" title="Filter">▼</span></span></th>
-            <th class="sortable col-salary" data-col="salary"><span class="th-in"><span class="th-label">Salary</span><span class="th-funnel" data-filter="salary" title="Filter">▼</span></span></th>
-            <th class="sortable col-hours" data-col="hours_per_week"><span class="th-in"><span class="th-label">Hours</span><span class="th-funnel" data-filter="hours" title="Filter">▼</span></span></th>
+            <th class="sortable col-status" data-col="status"><span class="th-in"><span class="th-label">Status</span><button type="button" class="th-funnel" data-filter="status" aria-label="Filter by Status" title="Filter">▼</button></span></th>
+            <th class="sortable col-title" data-col="title"><span class="th-in"><span class="th-label">Title</span><button type="button" class="th-funnel" data-filter="title" aria-label="Filter by Title" title="Filter">▼</button></span></th>
+            <th class="sortable col-company" data-col="company"><span class="th-in"><span class="th-label">Company</span><button type="button" class="th-funnel" data-filter="company" aria-label="Filter by Company" title="Filter">▼</button></span></th>
+            <th class="sortable col-posted" data-col="posted_date"><span class="th-in"><span class="th-label">Posted</span><button type="button" class="th-funnel" data-filter="posted" aria-label="Filter by Posted" title="Filter">▼</button></span></th>
+            <th class="sortable col-type" data-col="work_type"><span class="th-in"><span class="th-label">Type</span><button type="button" class="th-funnel" data-filter="work_type" aria-label="Filter by Type" title="Filter">▼</button></span></th>
+            <th class="sortable col-salary" data-col="salary"><span class="th-in"><span class="th-label">Salary</span><button type="button" class="th-funnel" data-filter="salary" aria-label="Filter by Salary" title="Filter">▼</button></span></th>
+            <th class="sortable col-hours" data-col="hours_per_week"><span class="th-in"><span class="th-label">Hours</span><button type="button" class="th-funnel" data-filter="hours" aria-label="Filter by Hours" title="Filter">▼</button></span></th>
             <th class="sortable col-ats" data-col="ats"><span class="th-in"><span class="th-label">Fit</span></span></th>
           </tr>
         </thead>
@@ -259,7 +264,7 @@
 
 <!-- ═══ Detail Panel (full job overview) ═══ -->
 <div class="detail-overlay" id="detail-overlay"></div>
-<div class="detail-panel" id="detail-panel">
+<div class="detail-panel" id="detail-panel" role="dialog" aria-modal="true" aria-labelledby="detail-title">
   <div class="detail-header">
     <div class="detail-header-top">
       <div>

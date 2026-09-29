@@ -66,9 +66,36 @@ async function openDetail(id) {
 
     detailPanel.classList.add('open');
     detailOverlay.classList.add('open');
+    // F14: the drawer is a modal now — focus goes to its close button, and Tab
+    // stays inside it. A keyboard user used to be left on the table row behind
+    // an overlay that covered the screen.
+    lastFocus = document.activeElement;
+    $('#detail-close').focus();
   } catch(e) { toast(e.message,'error'); }
 }
-function closeDetail() { detailPanel.classList.remove('open'); detailOverlay.classList.remove('open'); setCurrentJob(null); }
+
+let lastFocus = null;
+
+const FOCUSABLE = 'a[href], button:not([disabled]), input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+function trapFocus(e) {
+  if (e.key !== 'Tab' || !detailPanel.classList.contains('open')) return;
+  const items = [...detailPanel.querySelectorAll(FOCUSABLE)];
+  if (!items.length) return;
+  const first = items[0], last = items[items.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}
+detailPanel.addEventListener('keydown', trapFocus);
+
+function closeDetail() {
+  detailPanel.classList.remove('open');
+  detailOverlay.classList.remove('open');
+  setCurrentJob(null);
+  // F14: focus goes back where it came from (the row), not to <body>.
+  if (lastFocus && document.contains(lastFocus)) lastFocus.focus();
+  lastFocus = null;
+}
 
 function prefillResumeForm(doc, profileName) {
   const el = $('#resume-edit'); if (!el) return;

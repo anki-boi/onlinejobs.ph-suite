@@ -17,9 +17,8 @@ router = APIRouter(tags=['Pipeline'])
 
 
 def _acquire_pipeline(conn, run_id, token, client, scope=None):
-    """Take the pipeline for one run. Returns (events, acquired): events are
-    the SSE lines to emit when the run could not start (lock or cross-process
-    claim busy); begin_run has been called when acquired."""
+    """Take the pipeline for one run. Returns (events, acquired) — events are the
+    SSE lines for a run that couldn't start; begin_run ran when acquired."""
     if not scheduler.pipeline_lock.acquire(blocking=False):
         return [sse("error", "Another run is in progress (auto-run or another tab) — try again shortly"),
                 sse("done", "busy")], False
@@ -38,7 +37,6 @@ def _acquire_pipeline(conn, run_id, token, client, scope=None):
     return [], True
 
 
-
 @router.post("/api/pipeline/run")
 def run_pipeline(body: PipelineRequest):
     """Start a scrape+enrich run as an SSE stream. A POST with the same scope as the run in progress returns that run_id (already_running) instead of busy."""
@@ -51,12 +49,9 @@ def run_pipeline(body: PipelineRequest):
     keyword = (body.keyword or "").strip()
     categories = body.categories or []
     posted_since = body.posted_since.isoformat() if body.posted_since else None
-    scope = {  # W5.4: canonical scope of this run (for idempotency + scope tracking)
-        "keyword": keyword,
-        "categories": list(categories),
-        "skills": list(body.skills or []),
-        "posted_since": posted_since,
-    }
+    # W5.4: canonical scope of this run (idempotency + scope tracking)
+    scope = {"keyword": keyword, "categories": list(categories),
+             "skills": list(body.skills or []), "posted_since": posted_since}
 
     # Resolve skill names to OJ.ph IDs from the local skill_tags first; the API only covers names the DB doesn't know.
     skill_ids: list[int] = []
@@ -187,14 +182,13 @@ def run_check(body: CheckRequest):
             "SELECT id, job_url, status FROM jobs WHERE job_url != '' ORDER BY id"
         ).fetchall()
     else:
-        # B7: "stale" now means one thing. The manual check used to hardcode 7
-        # days while auto-run obeyed config's enrich_interval_days — same button,
-        # two rules.
-        max_age = body.max_age_days if body.max_age_days is not None \
-            else int(srv._cfg.get("enrich_interval_days", 7) or 7)
+        # B7: one definition of stale — config's enrich_interval_days, not a
+        # hardcoded 7 that only the manual button believed.
+        cfg_age = int(srv._cfg.get("enrich_interval_days", 7) or 7)
+        max_age = body.max_age_days if body.max_age_days is not None else cfg_age
         rows = job_repo.get_jobs_needing_enrichment(
             conn, max_age_days=max_age,
-            status_filter=["New", "Interested"] if not body.recheck_all else None,
+            status_filter=None if body.recheck_all else ["New", "Interested"],
         )
 
     jobs_to_check = [(r["id"], r["job_url"]) for r in rows if r["job_url"]]
@@ -251,5 +245,4 @@ def stop_pipeline(body: StopRequest = None):
     """Stop the active run, or the run_id named in the body (W2.8: a run_id, or the active run when omitted)."""
     run_id = body.run_id if body is not None else None
     stopped = scheduler.stop_run(run_id)
-    return {"ok": True,
-            "message": "Stop signal sent" if stopped else "No active run to stop"}
+    return {"ok": True, "message": "Stop signal sent" if stopped else "No active run to stop"}
