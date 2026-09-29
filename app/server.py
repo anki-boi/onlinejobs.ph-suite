@@ -111,8 +111,22 @@ def get_client() -> OJClient:
             delay=_cfg.get("request_delay", 1.0),
             max_retries=_cfg.get("max_retries", 3),
             user_agent=_cfg.get("user_agent") or _DEFAULT_UA,
+            cookies=_cfg.get("oj_cookies") or None,   # L2: actually send them now
         )
     return _client
+
+
+def reset_client() -> None:
+    """H3 (audit): the client used to be built once and kept forever, so
+    base_url / request_delay / user_agent / oj_cookies needed a restart. The
+    config-reload endpoint drops it here and the next get_client() rebuilds."""
+    global _client
+    if _client is not None:
+        try:
+            _client.session.close()
+        except Exception:
+            pass
+    _client = None
 
 
 def _claim_run_or_busy(conn) -> tuple[bool, str]:

@@ -39,7 +39,12 @@ SELECTORS: dict[str, list[str]] = {
     # no bare-<h1> fallback: the soft-404 page's h1 ("Oops, we lost you
     # there") is not a job title and must not be read as one
     "detail.title":     ["h1.job__title"],
-    "detail.company":   ["h3.job__logo", "h3"],
+    # L1 (audit): no bare-<h3> fallback. Logged out, a live detail page has no
+    # logo block at all — its only <h3> is "Please login or register as
+    # jobseeker to apply for this job.", which the fallback happily returned,
+    # writing that sentence into the Company column of 923 of 1,232 rows.
+    # Missing company is now honestly None (enrich with oj_cookies fills it).
+    "detail.company":   ["h3.job__logo"],
     "detail.employer":  ["h3.job__logo img", "h3 img"],
     "detail.desc":      ["p#job-description", ".job-description"],
     "detail.fields":    ["h3.fs-12"],
@@ -77,6 +82,7 @@ class JobStub:
     location: str | None = None
     hours: str | None = None
     skills: list[str] = field(default_factory=list)
+    category: str | None = None        # L4: derived from the skill-tag href path
 
 
 @dataclass
@@ -92,6 +98,7 @@ class JobDetail:
     hours_per_week: str | None = None
     date_updated: str | None = None
     skills: list[str] = field(default_factory=list)
+    category: str | None = None        # L4: derived from the topskill href path
     employer_id: int | None = None
     is_closed: bool = False
     close_reason: str | None = None
@@ -129,6 +136,19 @@ def extract_job_id(url: str) -> int | None:
     last = path.split("/")[-1]
     m = re.search(r"-(\d+)$", last)
     return int(m.group(1)) if m else None
+
+
+def _category_from_tags(scope) -> str | None:
+    """L4 (audit): the skill tags are category links — `/jobseekers/search/c/
+    marketing--email-marketing` carries the category (`marketing`) and the skill
+    (`email-marketing`). search_category was 0/1,232 rows while the markup shipped
+    it on every box, which is what made the category filter unimplementable."""
+    for a in scope.select("a[href*='/search/c/']"):
+        path = (a.get("href") or "").split("/search/c/")[-1]
+        path = path.split("?")[0].strip("/")
+        if path:
+            return path.split("--")[0].strip() or None
+    return None
 
 
 def _parse_structured_fields(soup: BeautifulSoup) -> dict[str, str]:
@@ -197,8 +217,11 @@ def _parse_company_from_box(box) -> str | None:
         img = box.select_one(sel)
         if img and img.get("alt"):
             return _clean(img["alt"])
-    MISSING_FIELDS["search.company"] += 1
-    log.debug("search.company: no company found in job box (logo img missing)")
+    # L3 (audit): live markup (2026-09-29) carries no company on the list view at
+    # all — no logo img, no name. Counting it as a missing field made the drift
+    # counter cry wolf on every run; None here is the honest answer, and enrich
+    # (with oj_cookies) is where company actually comes from.
+    log.debug("search.company: not present on this search box (arrives on enrich)")
     return None
 
 
@@ -283,19 +306,23 @@ def parse_search_results(html: str) -> list[JobStub]:
         if not salary:
             MISSING_FIELDS["search.salary"] += 1
 
-        # Description preview → location, hours
+        # Description preview → location, hours.
+        # L3 (audit): live markup (2026-09-29) ships neither company nor
+        # "Location:"/"Hours:" lines on the list view — those arrive on the
+        # detail page. They are still parsed opportunistically (older markup
+        # had them) but no longer counted as selector failures, so the drift
+        # counter measures fields the page actually carries.
         location, hours, _comp = _parse_desc_preview(box)
-        if not location:
-            MISSING_FIELDS["search.location"] += 1
-        if not hours:
-            MISSING_FIELDS["search.hours"] += 1
 
-        # Skills
+        # Skills + the category they hang under
         skills = []
         for a in box.select(SELECTORS["search.skills"][0]):
             t = _clean(a.get_text())
             if t and t not in skills:
                 skills.append(t)
+        category = _category_from_tags(box)
+        if not category:
+            MISSING_FIELDS["search.category"] += 1
 
         stubs.append(JobStub(
             job_id=job_id,
@@ -308,6 +335,7 @@ def parse_search_results(html: str) -> list[JobStub]:
             location=location,
             hours=hours,
             skills=skills,
+            category=category,
         ))
 
     log.info("Parsed %d job stubs from search results", len(stubs))
@@ -346,6 +374,7 @@ def parse_job_detail(html: str, url: str = "") -> JobDetail:
     if logo_h3:
         # Get employer ID from logo URL BEFORE extracting img
         logo_img = soup.select_one(SELECTORS["detail.employer"][0]) or logo_h3.find("img")
+        alt = (logo_img.get("alt") or "").strip() if logo_img else ""
         if logo_img:
             src = logo_img.get("src", "")
             m = re.search(r"employer_logos/(\d+)/", src)
@@ -353,6 +382,10 @@ def parse_job_detail(html: str, url: str = "") -> JobDetail:
                 employer_id = int(m.group(1))
             logo_img.extract()
         company = _clean(logo_h3.get_text())
+        if not company and alt:
+            # Logged-in markup puts the employer name in the logo's alt and nothing
+            # else in the heading, so extracting the img first lost it.
+            company = _clean(alt)
     else:
         MISSING_FIELDS["detail.company"] += 1
 
@@ -380,12 +413,13 @@ def parse_job_detail(html: str, url: str = "") -> JobDetail:
     hours_per_week = fields.get("HOURS PER WEEK")
     date_updated = fields.get("DATE UPDATED")
 
-    # Skills
+    # Skills (and the category they hang under — L4)
     skills = []
     for a in soup.select(SELECTORS["detail.skills"][0]):
         t = _clean(a.get_text())
         if t and t not in skills:
             skills.append(t)
+    category = _category_from_tags(soup)
 
     # Closed detection
     warning = _first(soup, "detail.closed")
@@ -424,6 +458,7 @@ def parse_job_detail(html: str, url: str = "") -> JobDetail:
         hours_per_week=hours_per_week,
         date_updated=date_updated,
         skills=skills,
+        category=category,
         employer_id=employer_id,
         is_closed=is_closed,
         close_reason=close_reason,

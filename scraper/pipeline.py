@@ -8,6 +8,7 @@ Both phases are generators that yield PipelineEvent objects.
 """
 
 import logging
+import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Generator
@@ -49,9 +50,13 @@ def search_url(
 
     If `category` is given, uses the category search path.
     Otherwise uses the keyword search path with pagination.
+
+    B5 (audit): the category path is percent-encoded. Category names like
+    "Hosting & Infrastructure Management" used to be interpolated raw, so the `&`
+    ended the path segment and the request hit a different page entirely.
     """
     if category:
-        return f"{base_url}/jobseekers/search/c/{category}/{page * JOBS_PER_PAGE}"
+        return f"{base_url}/jobseekers/search/c/{quote_plus(str(category))}/{page * JOBS_PER_PAGE}"
 
     offset = page * JOBS_PER_PAGE
     base = f"{base_url}/jobseekers/jobsearch"
@@ -72,6 +77,22 @@ def search_url(
     return f"{base}?{'&'.join(params)}"
 
 
+def split_keywords(keyword) -> list[str]:
+    """B1 (audit): "data entry, VA" was sent to OJ.ph as ONE jobkeyword, i.e. the
+    literal phrase "data entry, VA" — which matches nothing. Chips are OR'd, so
+    each keyword gets its own search (the same rule already applied to skills).
+    Accepts a comma/semicolon-separated string or a list."""
+    if not keyword:
+        return []
+    raw = list(keyword) if isinstance(keyword, (list, tuple)) else re.split(r"[,;]", str(keyword))
+    out: list[str] = []
+    for k in raw:
+        k = str(k).strip()
+        if k and k.lower() not in [x.lower() for x in out]:
+            out.append(k)
+    return out
+
+
 def harvest(
     client: OJClient,
     keyword: str = "",
@@ -82,46 +103,60 @@ def harvest(
 ) -> Generator[PipelineEvent, None, None]:
     """
     Phase 1: scrape search result pages.
-    
-    If `categories` is provided, search within each category.
-    Otherwise use the global keyword search.
-    `skill_ids` are passed to OJ.ph's skill_tags URL parameter.
-    `keyword` is used as a client-side filter on results.
+
+    The search space is the product of the scopes the user picked: one search per
+    keyword × per category × per skill (all OR'd — OJ.ph ANDs a comma-separated
+    skill_tags value, and a multi-word keyword string is a phrase, not a list).
+    `existing_ids` dedupes against the DB; `emitted_ids` against this run.
     """
     existing_ids = existing_ids or set()
-    keyword = (keyword or "").strip().lower()
+    kws = split_keywords(keyword)
+    cats = [c for c in (categories or []) if c]
     total_new = 0
     total_seen = 0
 
-    # Determine which URLs to search
-    if categories:
-        yield PipelineEvent("log", f"Harvest: {len(categories)} cats, kw={keyword!r}, skills={len(skill_ids or [])}")
-        base_targets = [(cat, cat) for cat in categories]
-    else:
-        yield PipelineEvent("log", f"Harvest: kw={keyword!r}, skills={len(skill_ids or [])}")
-        base_targets = [("all", None)]
+    yield PipelineEvent(
+        "log",
+        f"Harvest: kw={kws or ['(all)']} cats={cats or ['(all)']} "
+        f"skills={len(skill_ids or [])}",
+    )
 
     # OJ.ph ANDs a comma-separated skill_tags value (multiple skills in one
     # query -> almost always zero results), so run one search per skill and
     # union the results — OR semantics, which is what "pick skills" means.
     skill_sets = [[s] for s in (skill_ids or [])] or [None]
     search_targets = []
-    for label, slug in base_targets:
-        for ss in skill_sets:
-            search_targets.append((f"{label} / skill {ss[0]}" if ss else label, slug, ss))
+    for kw in (kws or [""]):
+        for slug in (cats or [None]):
+            for ss in skill_sets:
+                parts = []
+                if kw:
+                    parts.append(f"kw:{kw}")
+                if slug:
+                    parts.append(f"cat:{slug}")
+                if ss:
+                    parts.append(f"skill {ss[0]}")
+                label = " / ".join(parts) or "all"
+                search_targets.append((label, kw, slug, ss))
 
-    emitted_ids: set[int] = set()  # dedupe across per-skill searches
+    if len(search_targets) > 1:
+        yield PipelineEvent("log", f"  {len(search_targets)} searches (1 request each, throttled)")
 
-    for label, slug, target_skills in search_targets:
+    emitted_ids: set[int] = set()  # dedupe across every search in this run
+
+    for label, target_kw, slug, target_skills in search_targets:
         page = 0
         expected_total = None
+        seen_here = 0        # B8: per-target counters — `total_seen` across all
+        new_here = 0         # targets over-counted against a per-query total and
+                             # stopped pagination early, skipping whole pages
 
         while True:
             if client.stopped:
                 yield PipelineEvent("log", "[STOPPED]")
                 break
 
-            url = search_url(client.base_url, keyword, page, category=slug, skill_ids=target_skills)
+            url = search_url(client.base_url, target_kw, page, category=slug, skill_ids=target_skills)
             yield PipelineEvent("log", f"  [{label}] page {page + 1}")
 
             try:
@@ -155,20 +190,21 @@ def harvest(
 
             new_stubs = []
             for stub in stubs:
+                seen_here += 1
                 total_seen += 1
                 if stub.job_id and (stub.job_id in existing_ids or stub.job_id in emitted_ids):
                     continue
-                # Keyword filter (client-side): title must contain any keyword
-                if keyword:
-                    title_lower = (stub.title or "").lower()
-                    if not any(kw in title_lower for kw in (k.strip() for k in keyword.split(","))):
-                        continue
+                # B2 (audit, D1): no client-side title filter. The site already
+                # searched the keyword; requiring it in the title threw away jobs
+                # like "Part-time accountant" from a `bookkeeper` search. The
+                # post-hoc rule for that is the auto-hide keyword panel.
                 if posted_since and stub.posted_date and stub.posted_date < posted_since:
                     continue
                 new_stubs.append(stub)
 
             if new_stubs:
                 emitted_ids.update(s.job_id for s in new_stubs if s.job_id)
+                new_here += len(new_stubs)
                 yield PipelineEvent(
                     "harvest_result",
                     f"  [{label}] page {page + 1}: {len(new_stubs)} new",
@@ -179,13 +215,14 @@ def harvest(
                             "company": s.company, "posted_date": s.posted_date,
                             "salary": s.salary, "location": s.location,
                             "hours": s.hours, "skills": s.skills,
+                            "category": s.category,
                         } for s in new_stubs
-                    ], "keyword": keyword, "category": slug},
+                    ], "keyword": target_kw, "category": slug},
                 )
                 total_new += len(new_stubs)
 
-            # Stop conditions
-            if expected_total and total_seen >= expected_total:
+            # Stop conditions (B8: measured against THIS search's own total)
+            if expected_total and seen_here >= expected_total:
                 break
             if page > 0 and not new_stubs:
                 break
@@ -219,6 +256,7 @@ def enrich(
     open_count = 0
     closed_count = 0
     error_count = 0
+    rate_limited = 0   # L6: how many fetches gave up on 429/52x
     fetched_200 = 0   # non-gone pages that came back successfully
     parsed_titles = 0 # of those, pages where a title actually parsed
 
@@ -236,6 +274,10 @@ def enrich(
             return row_id, detail, None
         except ScrapeStopped:
             return row_id, None, "stopped"
+        except RateLimitExhausted as exc:
+            # L6: marked so the storm guard below can see it is a rate limit and
+            # not a bad page.
+            return row_id, None, f"rate-limited (HTTP {exc.status})"
         except Exception as exc:
             return row_id, None, str(exc)
 
@@ -254,6 +296,21 @@ def enrich(
                 break
             if err:
                 error_count += 1
+                if err.startswith("rate-limited"):
+                    rate_limited += 1
+                    # L6: a live run lost minutes to HTTP 521 — the site's edge was
+                    # refusing us, and the pipeline kept grinding through hundreds of
+                    # jobs. Once most of what we've tried is a rate limit, stop and
+                    # leave the rest pending; the next run picks them up.
+                    if done >= 8 and rate_limited >= max(5, done // 2):
+                        yield PipelineEvent(
+                            "error",
+                            f"Site is rate-limiting ({rate_limited}/{done} fetches) — "
+                            f"stopping enrich; {len(jobs) - done} job(s) stay queued "
+                            f"for the next run",
+                            {"rate_limited": rate_limited, "remaining": len(jobs) - done},
+                        )
+                        break
                 yield PipelineEvent("enrich_result", f"[{done}/{len(jobs)}] ⚠ {url} — {err}",
                                    {"row_id": row_id, "error": err,
                                     "progress": f"{done}/{len(jobs)}"})
@@ -316,7 +373,9 @@ def enrich(
 
     yield PipelineEvent(
         "summary",
-        f"Enrich complete: 🟢 {open_count} open, 🔴 {closed_count} closed, ⚠ {error_count} errors",
+        f"Enrich complete: 🟢 {open_count} open, 🔴 {closed_count} closed, ⚠ {error_count} errors"
+        + (f", rate-limited {rate_limited}" if rate_limited else ""),
         {"open": open_count, "closed": closed_count, "errors": error_count,
+         "rate_limited": rate_limited,
          "total": len(jobs), "stopped": client.stopped},
     )

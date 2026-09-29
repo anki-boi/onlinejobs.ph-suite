@@ -32,7 +32,9 @@ def apply_harvest(conn, event) -> tuple[int, list[tuple[dict, int]]]:
             hours=stub.get("hours"),
             skills=stub.get("skills") or None,
             search_keyword=event.data.get("keyword") or None,
-            search_category=event.data.get("category"),
+            # L4: the category the box hangs under (from its tag href), falling
+            # back to the category this search was scoped to.
+            search_category=stub.get("category") or event.data.get("category"),
         )
         if is_new:
             inserted += 1
@@ -67,6 +69,7 @@ def apply_enrich(conn, d: dict) -> bool:
         work_type=d.get("work_type"),
         date_updated=d.get("date_updated"),
         skills=d.get("skills") or None,
+        category=d.get("category"),
         employer_id=d.get("employer_id"),
         is_closed=d.get("is_closed", False),
         close_reason=d.get("close_reason"),

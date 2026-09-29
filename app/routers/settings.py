@@ -39,6 +39,10 @@ def reload_config():
     before = appconfig.get()
     appconfig.reload()
     after = appconfig.get()
+    # H3 (audit): scraper settings (base_url, request_delay, max_retries,
+    # user_agent, oj_cookies) used to be frozen at first use — the doc in
+    # docs/operations.md said so. Rebuilding here makes a reload actually apply.
+    srv.reset_client()
     return {"ok": True, "changed": before != after, "features_off": appconfig.features_off()}
 
 

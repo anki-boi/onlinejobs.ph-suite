@@ -38,11 +38,36 @@ def search_skills(conn: sqlite3.Connection, keyword: str) -> list[sqlite3.Row]:
 
 
 def get_categories(conn: sqlite3.Connection) -> list[dict]:
-    """Distinct top-level categories with counts."""
-    # SQLite doesn't have split(); do it in Python
-    all_rows = conn.execute("SELECT category_path FROM skill_tags WHERE category_path != ''").fetchall()
-    cats: dict[str, int] = {}
-    for r in all_rows:
-        top = r["category_path"].split(" > ")[0] if r["category_path"] else "Uncategorized"
-        cats[top] = cats.get(top, 0) + 1
-    return [{"name": k, "count": v} for k, v in sorted(cats.items())]
+    """Distinct top-level categories with counts AND the slug OJ.ph actually uses.
+
+    B5 (audit): this used to return {name, count} only, so the browser invented a
+    slug (`name.toLowerCase().replace(/ /g,'-')`) and interpolated it raw into
+    /jobseekers/search/c/{slug}/{offset} — "Hosting & Infrastructure Management"
+    became a path with a literal `&` in it, and the scrape hit nothing. The slug
+    is already in skill_tags (children carry their parent's slug); use the most
+    common one per category.
+    """
+    from collections import Counter
+    rows = conn.execute(
+        "SELECT category_path, slug FROM skill_tags WHERE category_path != ''"
+    ).fetchall()
+    counts: dict[str, int] = {}
+    slugs: dict[str, Counter] = {}
+    for r in rows:
+        top = r["category_path"].split(" > ")[0]
+        counts[top] = counts.get(top, 0) + 1
+        if r["slug"]:
+            slugs.setdefault(top, Counter())[r["slug"]] += 1
+    out = []
+    for name, count in sorted(counts.items()):
+        pick = slugs.get(name)
+        out.append({"name": name, "count": count,
+                    "slug": (pick.most_common(1)[0][0] if pick else "") or _slugify(name)})
+    return out
+
+
+def _slugify(name: str) -> str:
+    """Last-resort slug for a category with no tagged children to learn from."""
+    import re
+    s = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
+    return s

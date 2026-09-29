@@ -54,6 +54,7 @@ def list_jobs(request: Request,
     work_type: str | None = None,
     skill: str | None = None,
     skills: str | None = None,  # comma-separated OR filter
+    categories: str | None = None,  # F5: comma-separated category slugs
     scrape_status: str | None = None,  # comma-separated, e.g. "Open,Closed"
     sort: str | None = None,  # any sortable column, else newest-first
     order: str = "desc",  # asc | desc
@@ -88,6 +89,7 @@ def list_jobs(request: Request,
         conn, page=page, per_page=per_page, status=status,
         search=search, include_hidden=include_hidden,
         work_type=work_type, skill=skill, skills=skills,
+        categories=categories,
         scrape_status=scrape_status, sort=sort, order=order,
         title=title, company=company, salary=salary,
         location=location, hours=hours,

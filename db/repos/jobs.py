@@ -46,6 +46,23 @@ def norm_title(title: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", (title or "").lower())
 
 
+# B4 (audit): the same normalization, named for what it's matching. Employer names
+# need the same folding ("Acme, Inc." == "acme inc"), so there is one implementation.
+norm_company = norm_title
+
+# L1: the logged-out detail page's only <h3> is page chrome, not an employer. A
+# stale parser (or a fixture) must not be able to write it back into the column.
+_PAGE_CHROME = ("please login or register", "login or register")
+
+
+def clean_company(name: str | None) -> str | None:
+    """Employer name, or None when the value is scraped page chrome."""
+    n = (name or "").strip()
+    if not n or any(n.lower().startswith(c) for c in _PAGE_CHROME):
+        return None
+    return n
+
+
 def _salary_struct(salary: str | None) -> tuple:
     """Structured salary fields for one salary text: (min, max, currency,
     monthly_min_PHP, monthly_max_PHP). FX rate is LIVE (W4.1); no live rate
@@ -92,28 +109,44 @@ def renormalize(conn) -> dict:
     return fx
 
 
-def _find_repost_origin(conn, row_id: int, title: str, employer_id: int) -> int | None:
-    """Earliest non-repost row with the same normalized title + employer.
-    # ponytail: scans the employer's rows in Python (dozens per employer,
-    # not thousands); a norm_title column if it ever gets slow."""
+def _find_repost_origin(conn, row_id: int, title: str, employer_id: int | None = None,
+                        company: str | None = None) -> int | None:
+    """Earliest non-repost row with the same normalized title, matched on the
+    strongest key available: employer_id when we have it, otherwise the company
+    name (B4: employer_id is NULL on 1,115 of 1,232 rows — the employer logo is
+    behind a jobseeker login — so the company text is the only key that exists
+    for most of the DB, and reposts went largely undetected).
+
+    Index-backed on (norm_title, employer_id) / (norm_company, norm_title); the
+    old version re-queried the title of every candidate row one at a time."""
     nt = norm_title(title)
     if not nt:
         return None
-    rows = conn.execute(
-        "SELECT id FROM jobs WHERE employer_id = ? AND id != ? AND repost_of IS NULL AND title IS NOT NULL",
-        (employer_id, row_id),
-    ).fetchall()
-    for r in rows:
-        if norm_title(conn.execute("SELECT title FROM jobs WHERE id=?", (r["id"],)).fetchone()[0]) == nt:
-            return r["id"]
-    return None
+    if employer_id:
+        cond, arg = "employer_id = ?", employer_id
+    else:
+        nc = norm_company(company)
+        if not nc:
+            return None
+        cond, arg = "norm_company = ?", nc
+    row = conn.execute(
+        f"SELECT id FROM jobs WHERE norm_title = ? AND id != ? "
+        f"AND repost_of IS NULL AND {cond} ORDER BY id LIMIT 1",
+        (nt, row_id, arg),
+    ).fetchone()
+    return row["id"] if row else None
 
 
 # Columns the API may sort by (Excel-style header sorting).
+# B14: `skills` dropped — sorting by a comma-joined tag string is meaningless.
 SORTABLE = {
     "title", "company", "salary", "location", "hours_per_week", "work_type",
-    "posted_date", "date_updated", "date_found", "status", "scrape_status", "skills",
+    "posted_date", "date_updated", "date_found", "status", "scrape_status",
 }
+
+# B14: the order a job actually moves through, used when sorting by status.
+STATUS_ORDER = ["New", "Interested", "Applied", "Interviewing", "Offer",
+                "Hired", "Rejected", "Hidden"]
 
 def _split_multi(value: str | None) -> list[str]:
     """'a,b, c' → ['a','b','c'] (stripped, non-empty)."""
@@ -132,6 +165,7 @@ def get_jobs(
     work_type: str | None = None,
     skill: str | None = None,
     skills: str | None = None,
+    categories: str | None = None,
     scrape_status: str | None = None,
     sort: str | None = None,
     order: str = "desc",
@@ -190,6 +224,15 @@ def get_jobs(
         if sks:
             clauses.append("(" + " OR ".join("skills LIKE ?" for _ in sks) + ")")
             params.extend(f"%{s}%" for s in sks)
+
+    # F5 (audit): the category a job hangs under, harvested from its tag href
+    # (L4). The browser used to fake this by substring-matching the category name
+    # against the rendered title/company text.
+    if categories:
+        cats = _split_multi(categories)
+        if cats:
+            clauses.append("(" + " OR ".join("search_category = ?" for _ in cats) + ")")
+            params.extend(cats)
 
     if skill:
         clauses.append("skills LIKE ?")
@@ -271,6 +314,21 @@ def get_jobs(
                 f"(salary_monthly_max IS NULL) ASC, salary_monthly_max {order_sql}, "
                 f"id ASC"
             )  # id tie-break: equal salaries order deterministically
+        elif sort == "hours_per_week":
+            # B14: the column is free text ("20-30 hours/week"), so "4" sorted
+            # above "40". Order on the leading number; unparsable text last.
+            order_by = (
+                "CASE WHEN hours_per_week GLOB '[0-9]*' THEN "
+                "CAST(CASE WHEN instr(hours_per_week,'-') > 0 "
+                "THEN substr(hours_per_week, 1, instr(hours_per_week,'-') - 1) "
+                "ELSE hours_per_week END AS INTEGER) ELSE 1e9 END " + order_sql
+            )
+        elif sort == "status":
+            # B14: workflow order, not alphabetical — a-z made the column useless.
+            rank = "CASE status " + " ".join(
+                f"WHEN '{s}' THEN {i}" for i, s in enumerate(STATUS_ORDER)
+            ) + " ELSE 99 END"
+            order_by = f"{rank} {order_sql}"
         else:
             order_by = f"{sort} {order_sql}"
     else:
@@ -315,6 +373,7 @@ def upsert_stub(
     update the list-view fields and return the existing ID.
     """
     skills_str = ", ".join(skills) if skills else None
+    company = clean_company(company)
     date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if salary is not None:
         s_min, s_max, s_cur, s_pmin, s_pmax = _salary_struct(salary)
@@ -348,6 +407,9 @@ def upsert_stub(
         if title is not None and norm_title(title):
             updates.append("norm_title = ?")
             vals.append(norm_title(title))
+        if company is not None:
+            updates.append("norm_company = ?")
+            vals.append(norm_company(company))
         if salary is not None:
             # Only touch the structured fields when we actually got a value,
             # or when the salary text genuinely changed ("$800/mo" → "TBD"
@@ -390,6 +452,13 @@ def upsert_stub(
             norm_title(title) if title else None,
         ),
     )
+    conn.execute("UPDATE jobs SET norm_company = ? WHERE id = last_insert_rowid()",
+                 (norm_company(company),))
+    # B3 (audit): the INSERT path never bumped jobs_version, so a freshly
+    # harvested job had no ats_scores row until some unrelated UPDATE happened
+    # to bump it — and under "ATS >= 50" (an EXISTS on ats_scores) those brand-new
+    # jobs were invisible. Observed live: 1,232 jobs vs 1,143 score rows.
+    _bump_jobs_version(conn)
     conn.commit()
     return conn.execute("SELECT last_insert_rowid() AS id").fetchone()["id"], True
 
@@ -406,6 +475,7 @@ def enrich_job(
     work_type: str | None = None,
     date_updated: str | None = None,
     skills: list[str] | None = None,
+    category: str | None = None,
     employer_id: int | None = None,
     is_closed: bool = False,
     close_reason: str | None = None,
@@ -413,6 +483,7 @@ def enrich_job(
     """Update a job with detail-page data. Only overwrites non-None values."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     scrape_status = "Closed" if is_closed else "Open"
+    company = clean_company(company)
 
     fields = {
         "scrape_status": scrape_status,
@@ -429,8 +500,14 @@ def enrich_job(
             fields[col] = val
     if skills is not None:
         fields["skills"] = ", ".join(skills)
+    if category:
+        # L4: a re-check backfills search_category on rows harvested before the
+        # parser knew how to read it (it was NULL on all 1,232 of them).
+        fields["search_category"] = category
     if title is not None and norm_title(title):
         fields["norm_title"] = norm_title(title)
+    if company is not None:
+        fields["norm_company"] = norm_company(company)
 
     # Structured salary (raw min/max + currency + PHP-normalized monthly)
     # follows the salary text
@@ -454,9 +531,10 @@ def enrich_job(
         _bump_jobs_version(conn)
 
     # Repost detection needs the effective (possibly pre-existing) title + employer
-    row = conn.execute("SELECT title, employer_id FROM jobs WHERE id=?", (row_id,)).fetchone()
-    if row and row["title"] and row["employer_id"]:
-        origin = _find_repost_origin(conn, row_id, row["title"], row["employer_id"])
+    row = conn.execute("SELECT title, employer_id, company FROM jobs WHERE id=?", (row_id,)).fetchone()
+    if row and row["title"]:
+        origin = _find_repost_origin(conn, row_id, row["title"],
+                                     row["employer_id"], row["company"])
         conn.execute("UPDATE jobs SET repost_of=? WHERE id=?", (origin, row_id))
 
     conn.commit()

@@ -476,11 +476,14 @@ class TestJobsVersionW23:
         job_repo.update_follow_up(conn, rid, "2026-01-01")
         assert job_repo.get_jobs_version(conn) == v0
 
-    def test_new_stub_alone_does_not_bump(self, conn):
-        # a fresh row has no memo entry yet — only content changes matter
+    def test_new_stub_bumps_version(self, conn):
+        """B3 (audit): the INSERT path never bumped jobs_version, so a freshly
+        harvested job had no ats_scores row until some unrelated UPDATE happened
+        to bump it — and with "ATS >= 50" (an EXISTS on ats_scores) brand-new jobs
+        were invisible in the table."""
         v0 = job_repo.get_jobs_version(conn)
         job_repo.upsert_stub(conn, job_id=4, job_url="http://oj/job/4", title="Dev")
-        assert job_repo.get_jobs_version(conn) == v0
+        assert job_repo.get_jobs_version(conn) == v0 + 1
 
     def test_materialized_ats_rescores_after_in_place_enrichment(self, conn, monkeypatch):
         # W4.3 replaced the W2.3 per-process memo with the materialized

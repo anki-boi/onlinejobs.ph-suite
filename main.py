@@ -59,6 +59,7 @@ def initial_skills_refresh(cfg: dict) -> None:
         api_url=cfg.get("api_url", "https://api.onlinejobs.ph"),
         delay=cfg.get("request_delay", 1.0),
         max_retries=cfg.get("max_retries", 3),
+        cookies=cfg.get("oj_cookies") or None,
     )
     try:
         skills = fetch_skills(client, keyword="")
@@ -180,12 +181,20 @@ def main():
     parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8371, help="Port (default: 8371)")
     parser.add_argument("--skip-skills", action="store_true", help="Skip initial skills refresh")
+    parser.add_argument("--once", action="store_true",
+                        help="Run one scrape+enrich pass and exit (no server, no scheduler)")
+    parser.add_argument("--db", default=None, metavar="PATH",
+                        help="Use a different jobs.db (for a dry run against a copy)")
     args = parser.parse_args()
 
     print(f"  Job Hunter starting on http://{args.host}:{args.port}")
 
     # Init DB
     cfg = load_config()
+    if args.db:
+        import db.connection as dbconn
+        dbconn.DB_PATH = args.db
+        print(f"  [..] Using database {args.db}")
     print("  [..] Initialising database...")
     init_db()
 
@@ -199,6 +208,20 @@ def main():
 
     # Run server
     from app import scheduler
+    if args.once:
+        # B1/B2/B8 proof path: one unattended pass, then the process exits.
+        import db.connection as dbconn
+        from app import events
+        summary = scheduler.run_once(OJClient(
+            base_url=cfg.get("base_url", "https://www.onlinejobs.ph"),
+            api_url=cfg.get("api_url", "https://api.onlinejobs.ph"),
+            delay=cfg.get("request_delay", 1.0),
+            max_retries=cfg.get("max_retries", 3),
+            cookies=cfg.get("oj_cookies") or None,
+            user_agent=cfg.get("user_agent"),
+        ), dbconn.get_conn(), events.publish, cfg)
+        print("  " + " | ".join(f"{k}={v}" for k, v in summary.items()))
+        return
     scheduler.start()  # daemon thread: auto-run harvest+enrich on the configured interval
     server = make_server(args.host, args.port)
     try:

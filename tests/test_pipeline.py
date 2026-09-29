@@ -7,6 +7,7 @@ current thread" when CPython's gc reclaimed the generator frame on a pool
 worker thread — see server_e2e.log).
 """
 
+import re
 import sys
 import threading
 import time
@@ -265,3 +266,174 @@ def test_harvest_multiple_skills_is_or_not_and():
     assert any("skill_tags=2" in u for u in skill_urls)
     summary = [e for e in events if e.type == "summary"][0]
     assert summary.data["new"] == 2
+
+
+def _kw_pages(kw_to_job):
+    """Fake search pages keyed by the jobkeyword the site was asked for."""
+    box = ('<div class="jobpost-cat-box latest-job-post">'
+           '<h4>{t} <span class="badge">Any</span></h4>'
+           '<p data-temp="2026-08-25 14:30:00"><em>Co</em></p>'
+           '<a class="joblink" href="/jobseekers/job/{s}-{i}">Apply</a>'
+           '</div>')
+    out = {}
+    for kw, (i, title) in kw_to_job.items():
+        out[kw] = ("<html><body><script>window.dataLayer = [{\"search_result_count\":1}]</script>"
+                   + box.format(t=title, s=title.lower().replace(" ", "-"), i=i)
+                   + "</body></html>")
+    return out
+
+
+class _KwClient:
+    """Records every URL and answers by the jobkeyword in it."""
+    stopped = False
+    base_url = "http://x"
+
+    def __init__(self, pages):
+        self.pages = pages
+        self.urls = []
+
+    def get(self, url):
+        self.urls.append(url)
+        m = re.search(r"jobkeyword=([^&]*)", url)
+        key = (m.group(1).replace("%20", " ").strip() if m else "")
+        return FakeResp(self.pages.get(key) or self.pages.get("") or "<html><body></body></html>")
+
+
+def test_each_keyword_gets_its_own_search():
+    """B1: chips joined with ", " were sent as ONE jobkeyword, i.e. the literal
+    phrase "bookkeeper, va" — which matches nothing on the site."""
+    client = _KwClient(_kw_pages({"bookkeeper": (901, "Bookkeeper needed"),
+                                  "va": (902, "VA for admin work")}))
+    events = list(harvest(client, keyword="bookkeeper, va"))
+    kws = [u.split("jobkeyword=")[1].split("&")[0] for u in client.urls if "jobkeyword=" in u]
+    assert "bookkeeper" in kws and "va" in kws, f"keywords not searched separately: {kws}"
+    assert not any("bookkeeper%2C%20va" in u or "bookkeeper, va" in u for u in client.urls)
+    summary = [e for e in events if e.type == "summary"][0]
+    assert summary.data["new"] == 2, "both keyword searches contributed jobs"
+
+
+def test_keyword_no_longer_filters_results_by_title():
+    """B2 (D1): a `bookkeeper` search used to drop every stub whose title didn't
+    contain the word — killing "Part-time accountant" and the rest."""
+    client = _KwClient({"bookkeeper": _kw_pages({"": (0, "")})[""]})
+    # one page whose job title does NOT contain the keyword
+    html = ('<html><body><script>window.dataLayer = [{"search_result_count":1}]</script>'
+            '<div class="jobpost-cat-box latest-job-post">'
+            '<h4>Part-time accountant <span class="badge">Any</span></h4>'
+            '<p data-temp="2026-08-25 14:30:00"><em>Co</em></p>'
+            '<a class="joblink" href="/jobseekers/job/part-time-accountant-903">Apply</a>'
+            '</div></body></html>')
+    client.pages = {"bookkeeper": html}
+    events = list(harvest(client, keyword="bookkeeper"))
+    stubs = [s for e in events if e.type == "harvest_result" for s in e.data["stubs"]]
+    assert [s["title"] for s in stubs] == ["Part-time accountant"], \
+        "the site already searched; the client-side title filter threw results away"
+
+
+def test_pagination_stop_is_per_search_not_global():
+    """B8: total_seen accumulated across every search target and was compared to
+    a per-query total, so a second search stopped after page 1."""
+    box = ('<div class="jobpost-cat-box latest-job-post">'
+           '<h4>{t} <span class="badge">Any</span></h4>'
+           '<p data-temp="2026-08-25 14:30:00"><em>Co</em></p>'
+           '<a class="joblink" href="/jobseekers/job/{s}-{i}">Apply</a>'
+           '</div>')
+
+    class TwoPageClient:
+        stopped = False
+        base_url = "http://x"
+
+        def __init__(self):
+            self.urls = []
+
+        def get(self, url):
+            self.urls.append(url)
+            page = url.rstrip("/").rsplit("/", 1)[-1]
+            n = int(page) if page.isdigit() else 0
+            kw = url.split("jobkeyword=")[1].split("&")[0].replace("%20", " ")
+            if n > 1:
+                return FakeResp("<html><body></body></html>")   # no more boxes
+            title = f"{kw} job {n}"
+            return FakeResp(
+                "<html><body><script>window.dataLayer = [{\"search_result_count\":60}]</script>"
+                + box.format(t=title, s=title.lower().replace(" ", "-"),
+                             i=1000 + abs(hash(kw)) % 500 + n)
+                + "</body></html>")
+
+    client = TwoPageClient()
+    events = list(harvest(client, keyword="alpha, beta"))
+    assert sum(len(e.data["stubs"]) for e in events if e.type == "harvest_result") >= 2
+    # each keyword must have been asked for page 2 — the old shared counter
+    # stopped the second keyword after page 1 because the first had "seen" 60
+    per_kw = {}
+    for u in client.urls:
+        kw = u.split("jobkeyword=")[1].split("&")[0].replace("%20", " ")
+        per_kw.setdefault(kw, []).append(u.rstrip("/").rsplit("/", 1)[-1])
+    for kw in ("alpha", "beta"):
+        assert len(per_kw.get(kw, [])) >= 2, f"{kw} stopped too early: {per_kw.get(kw)}"
+
+
+def test_category_slug_is_url_encoded():
+    """B5: 'Hosting & Infrastructure Management' interpolated raw into the path
+    segment put a literal & in the URL and hit a different page."""
+    from scraper.pipeline import search_url
+    u = search_url("http://x", "", 0, category="hosting-&-infrastructure-management")
+    assert "&" not in u.split("/search/c/")[1].split("?")[0], u
+    assert "hosting-%26-infrastructure-management" in u
+
+
+def test_harvest_emits_the_derived_category():
+    """L4: the stub carries the category parsed from its tag href."""
+    html = ('<html><body><script>window.dataLayer = [{"search_result_count":1}]</script>'
+            '<div class="jobpost-cat-box latest-job-post">'
+            '<h4>Email Marketing VA <span class="badge">Any</span></h4>'
+            '<p data-temp="2026-08-25 14:30:00"><em>Co</em></p>'
+            '<a class="joblink" href="/jobseekers/job/email-marketing-va-904">Apply</a>'
+            '<div class="job-tag"><a class="badge" href="/jobseekers/search/c/marketing--email-marketing">Email Marketing</a></div>'
+            '</div></body></html>')
+    events = list(harvest(_KwClient({"": html}), keyword=""))
+    stubs = [s for e in events if e.type == "harvest_result" for s in e.data["stubs"]]
+    assert stubs and stubs[0]["category"] == "marketing"
+
+
+class _StormClient:
+    """Every detail page comes back Cloudflare 521 until the retries run out."""
+    stopped = False
+    base_url = "http://x"
+
+    def set_stop(self, token):
+        self.stopped = token.stopped
+
+    def get(self, url):
+        from scraper.client import RateLimitExhausted
+        raise RateLimitExhausted("Failed after 3 retries", status=521)
+
+
+def test_enrich_stops_on_a_rate_limit_storm():
+    """L6: a live run burned minutes grinding HTTP 521s one job at a time. Once
+    most fetches are rate limits, enrich stops and leaves the rest queued."""
+    jobs = [(i, f"http://a/job/{i}") for i in range(1, 41)]
+    events = list(enrich(_StormClient(), jobs, workers=2))
+    errs = [e for e in events if e.type == "error"]
+    assert any("rate-limiting" in e.message for e in errs), [e.message for e in errs]
+    results = [e for e in events if e.type == "enrich_result"]
+    assert len(results) < len(jobs), "it stopped early instead of trying all 40"
+    summary = [e for e in events if e.type == "summary"][0]
+    assert summary.data["rate_limited"] >= 5
+
+
+def test_one_rate_limited_job_does_not_stop_the_run():
+    """One bad page is not a storm — the run continues."""
+    class MostlyFine:
+        stopped = False
+        base_url = "http://x"
+        def set_stop(self, token): self.stopped = token.stopped
+        def get(self, url):
+            from scraper.client import RateLimitExhausted
+            if url.endswith("/job/1"):
+                raise RateLimitExhausted("nope", status=521)
+            return FakeResp(DETAIL_HTML)
+
+    events = list(enrich(MostlyFine(), [(i, f"http://a/job/{i}") for i in range(1, 6)], workers=2))
+    assert not any("rate-limiting" in e.message for e in events if e.type == "error")
+    assert sum(1 for e in events if e.type == "enrich_result") == 5

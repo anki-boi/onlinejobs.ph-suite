@@ -22,3 +22,4 @@ rendercv_output/
 
 # frontend test harness (dev-only; the app itself ships no JS deps)
 node_modules/
+.tmp/

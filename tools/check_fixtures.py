@@ -1,10 +1,14 @@
 """
 tools/check_fixtures.py — W3.1 live-drift check (NOT a pytest; hits the network).
 
-Re-fetches the four page types the fixture corpus covers (1 req/s politeness)
-and re-runs the real parsers against the live HTML with the same expectations
-the fixture tests assert. If the site's markup drifts so a page no longer
-parses the way the fixtures do, this exits 1 and names the broken check.
+Re-fetches the page types the fixture corpus covers (1 req/s politeness) and
+re-runs the real parsers against the live HTML with the same expectations the
+fixture tests assert. If the site's markup drifts so a page no longer parses the
+way the fixtures do, this exits 1 and names the broken check.
+
+The corpus is two generations on purpose (L5): `*_legacy.html` is what the site
+looked like in September, `*_live.html` is what it looks like now, and a parser
+change has to keep both working.
 
 Exit 0 also when the site is unreachable (warn only — no network ≠ drift).
 
@@ -45,7 +49,11 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 
 
 def main() -> int:
-    client = OJClient(delay=1.0, user_agent=appconfig.get()["user_agent"])
+    cfg = appconfig.get()
+    client = OJClient(delay=cfg.get("request_delay", 1.0),
+                      user_agent=cfg.get("user_agent"),
+                      cookies=cfg.get("oj_cookies") or None)
+    logged_in = bool(cfg.get("oj_cookies"))
 
     # 1 — search results page
     r = client.get("/jobseekers/jobsearch")
@@ -56,6 +64,17 @@ def main() -> int:
         check("search: first stub has job_id + title",
               s.job_id is not None and bool(s.title),
               f"id={s.job_id} title={s.title!r}")
+        # L4: the category lives in the tag href (/search/c/<cat>--<skill>), which
+        # is what search_category is built from now.
+        with_cat = sum(1 for x in stubs if x.category)
+        check("search: category derived from tag hrefs",
+              with_cat >= max(1, len(stubs) // 2),
+              f"{with_cat}/{len(stubs)} boxes carry a category")
+        # L1/L3: the failure mode is the page chrome landing in `company`, not the
+        # presence of a name — some boxes legitimately show one.
+        banner = [x.company for x in stubs if x.company and "login or register" in x.company.lower()]
+        check("search: no login-banner text in company", not banner,
+              f"{sum(1 for x in stubs if x.company)}/{len(stubs)} boxes show a company")
     total = get_total_results(r.text)
     check("search: dataLayer result count present", total is not None, str(total))
 
@@ -73,10 +92,16 @@ def main() -> int:
             if d.is_closed:
                 print(f"note: {s.job_id} is closed live — trying the next job in the list")
                 continue
-            check("detail: title + company parsed",
-                  bool(d.title) and bool(d.company),
+            check("detail: title + description parsed",
+                  bool(d.title) and bool(d.description),
                   f"closed={d.is_closed}")
-            check("detail: description present", bool(d.description))
+            # L1/L2: the employer logo (and so the company + employer_id) is only
+            # on the page when scraping logged in. Ask for it, don't fake it.
+            if logged_in:
+                check("detail: company parsed (logged in)", bool(d.company), str(d.company))
+            else:
+                print(f"note: company={d.company!r} — logged out, the logo is hidden; "
+                      f"set oj_cookies in config.local.json to scrape employers")
             picked = True
             break
         if not picked:

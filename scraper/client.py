@@ -45,10 +45,21 @@ class StopToken:
 
 
 class RateLimitExhausted(Exception):
-    """Raised after max retries on 429."""
+    """Raised after max retries on 429/5xx.
+
+    L6 (audit): `status` carries the last HTTP code seen, so the pipeline can tell
+    a Cloudflare rate-limit storm (521) from a genuinely dead page."""
+
+    def __init__(self, message: str, status: int | None = None):
+        super().__init__(message)
+        self.status = status
 
 
 DEFAULT_BASE_URL = "https://www.onlinejobs.ph"
+
+# L6: Cloudflare's "origin is down / unavailable" family. They clear on their own;
+# they are not a reason to hammer the edge with a 1-second ladder.
+_CF_DOWN = {521, 522, 523, 524}
 DEFAULT_API_URL = "https://api.onlinejobs.ph"
 
 
@@ -64,6 +75,7 @@ class OJClient:
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36"
         ),
+        cookies: str | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_url = api_url.rstrip("/")
@@ -74,6 +86,13 @@ class OJClient:
             "User-Agent": user_agent,
             "Accept-Language": "en-US,en;q=0.9",
         })
+        # L2 (audit): `oj_cookies` was documented in the README, redacted in
+        # /api/config and covered by a redaction test — and never sent. Scraping
+        # logged-out is why employer_id is NULL on 90% of rows and why the
+        # employer block (hence company) was missing. A `k=v; k2=v2` string from
+        # config.local.json fixes both.
+        if cookies and cookies.strip():
+            self.session.headers["Cookie"] = cookies.strip()
         self._stop_token = StopToken()  # W2.8: per-run, swappable via set_stop()
         self._lock = threading.Lock()
         self._last_request = 0.0
@@ -99,6 +118,7 @@ class OJClient:
         """
         url = path if path.startswith("http") else f"{base or self.base_url}{path}"
         last_exc: Exception | None = None
+        last_status: int | None = None
 
         for attempt in range(self.max_retries + 1):
             if self._stop_token.stopped:
@@ -116,6 +136,7 @@ class OJClient:
 
             if resp.status_code == 429:
                 # Respect server-provided Retry-After (seconds or HTTP-date).
+                last_status = resp.status_code
                 retry_after = resp.headers.get("Retry-After")
                 wait = self._parse_retry_after(retry_after) or (2 ** attempt) * self.delay
                 log.warning("429 rate limit on %s — backing off %ds (attempt %d/%d)",
@@ -124,17 +145,25 @@ class OJClient:
                 continue
 
             if resp.status_code >= 500:
+                last_status = resp.status_code
                 last_exc = requests.HTTPError(f"HTTP {resp.status_code}", response=resp)
                 # Respect server-provided Retry-After on 5xx too.
                 retry_after = resp.headers.get("Retry-After")
                 wait = self._parse_retry_after(retry_after) or (2 ** attempt) * self.delay
+                if resp.status_code in _CF_DOWN:
+                    # L6: Cloudflare's 52x means "edge can't reach the origin" and
+                    # clears in tens of seconds. A 1-2-4s ladder just burns the
+                    # retry budget and re-arrives while it's still down.
+                    wait = max(wait, 15.0)
                 log.warning("HTTP %d on %s — retrying in %ds", resp.status_code, url, wait)
                 time.sleep(wait)
                 continue
 
             return resp
 
-        raise RateLimitExhausted(f"Failed after {self.max_retries} retries: {url}") from last_exc
+        raise RateLimitExhausted(
+            f"Failed after {self.max_retries} retries: {url}", status=last_status
+        ) from last_exc
 
     def post_json(self, url: str, body: dict) -> requests.Response:
         """POST JSON (for the skills API)."""

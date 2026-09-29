@@ -21,7 +21,12 @@ from tests.test_pipeline import FakeResp, _with_data_layer
 
 class SchedulerClient:
     """Page 0 → the shared SEARCH_HTML fixture (2 stubs, dataLayer 2); page 2+ →
-    no job boxes (site runs out); detail pages → DETAIL_HTML or CLOSED_HTML."""
+    no job boxes (site runs out); detail pages → DETAIL_HTML or CLOSED_HTML.
+
+    B2 (audit): when a keyword is in the URL it answers the way the site does —
+    only boxes containing it. The old client returned everything and the pipeline
+    threw away the non-matching stubs by title, which is why a "bookkeeper" run
+    lost "Part-time accountant"."""
     stopped = False
     base_url = "http://x"
 
@@ -35,7 +40,18 @@ class SchedulerClient:
         if url.endswith("/job/closed"):
             return FakeResp(CLOSED_HTML)
         if "jobsearch?" in url or "jobsearch?" in url:
-            return FakeResp(SEARCH_HTML)
+            from urllib.parse import unquote
+            kw = unquote(url.split("jobkeyword=")[1].split("&")[0]).strip().lower() \
+                if "jobkeyword=" in url else ""
+            if not kw:
+                return FakeResp(SEARCH_HTML)
+            head, *boxes = SEARCH_HTML.split('<div class="jobpost-cat-box')
+            kept = [b for b in boxes if kw in b.lower()]
+            return FakeResp(
+                head.replace("<html><body>",
+                             f'<html><body><script>window.dataLayer = '
+                             f'[{{"search_result_count":{len(kept)}}}]</script>')
+                + "".join('<div class="jobpost-cat-box' + b for b in kept))
         return FakeResp(DETAIL_HTML)
 
 

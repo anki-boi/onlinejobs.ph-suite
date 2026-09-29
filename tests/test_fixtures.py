@@ -100,3 +100,73 @@ class TestOldMarkupStillParses:
                            f"missing={[n for n, v in zip(fields, fields) if not v]}"
         # company must have come from the old-style <em>, not the img alt
         assert s.company == "OldStyle Inc"
+
+
+class TestLiveCorpus2026_09_29:
+    """L5 (audit): the site changed under the old corpus. These are the pages as
+    captured 2026-09-29 with the repo's own client, so the current markup is a
+    first-class fixture and not just a live-only hope."""
+
+    def test_search_page_parses(self):
+        stubs = parse_search_results(_read("search_results_live.html"))
+        assert len(stubs) >= 20
+        for s in stubs:
+            assert s.job_id is not None
+            assert s.title
+            assert s.posted_date          # data-temp is still the posted stamp
+        assert get_total_results(_read("search_results_live.html"))
+
+    def test_company_is_honestly_absent_on_the_list_view(self):
+        """L3: live boxes carry no employer at all — no logo, no name. Parsing
+        must return None, not invent something out of the page chrome."""
+        stubs = parse_search_results(_read("search_results_live.html"))
+        assert all(s.company is None for s in stubs)
+
+    def test_category_comes_from_the_tag_href(self):
+        """L4: search_category was NULL on all 1,232 rows while every box ships a
+        /jobseekers/search/c/<category>--<skill> href. That href is the category."""
+        stubs = parse_search_results(_read("search_results_live.html"))
+        with_cat = [s for s in stubs if s.category]
+        assert len(with_cat) >= len(stubs) * 0.6, "most boxes carry a category"  # ~22/30; the rest are untagged
+        assert all("--" not in (s.category or "") for s in with_cat), \
+            "the skill part of the path is stripped, leaving the category"
+
+    def test_detail_page_logged_out(self):
+        d = parse_job_detail(_read("job_detail_live.html"),
+                             "https://www.onlinejobs.ph/jobseekers/job/job-application-assistant-1740428")
+        assert d.job_id == 1740428
+        assert d.title == "Job Application Assistant"
+        assert d.description and len(d.description) > 200
+        assert not d.is_closed
+        assert d.salary and d.hours_per_week      # structured fields still parse
+        assert d.skills
+
+    def test_login_banner_is_not_a_company(self):
+        """L1: the bare-<h3> fallback returned the page chrome as the employer and
+        wrote it into 923 of 1,232 rows. Company is None until we scrape logged in."""
+        d = parse_job_detail(_read("job_detail_live.html"),
+                             "https://www.onlinejobs.ph/jobseekers/job/job-application-assistant-1740428")
+        assert d.company is None
+        assert "login" not in (d.company or "").lower()
+
+
+class TestLoginBannerRegression:
+    def test_only_a_logo_block_counts_as_company(self):
+        from scraper.parsers import parse_job_detail as pjd
+        logged_out = """
+        <html><body>
+          <h1 class="job__title" data-jobid="42">Some Role</h1>
+          <h3 class="fs-20 fw-600">Please login or register as jobseeker to apply for this job.</h3>
+          <p id="job-description" class="job-description">We need a VA.</p>
+        </body></html>"""
+        assert pjd(logged_out, "http://x/job/some-role-42").company is None
+
+        logged_in = """
+        <html><body>
+          <h1 class="job__title" data-jobid="42">Some Role</h1>
+          <h3 class="job__logo"><img src="/employer_logos/777/logo.png" alt="Acme Inc"></h3>
+          <p id="job-description" class="job-description">We need a VA.</p>
+        </body></html>"""
+        d = pjd(logged_in, "http://x/job/some-role-42")
+        assert d.company == "Acme Inc"
+        assert d.employer_id == 777

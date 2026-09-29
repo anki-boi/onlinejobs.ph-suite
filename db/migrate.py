@@ -18,6 +18,7 @@ import logging
 from db.migrations.v5_salary_currency import step as _v5
 from db.migrations.v6_ats_scores import step as _v6
 from db.migrations.v7_perf_indexes import step as _v7
+from db.migrations.v8_company_cleanup import step as _v8
 
 log = logging.getLogger(__name__)
 
@@ -130,6 +131,7 @@ MIGRATIONS: dict[int, callable] = {
     5: _v5,
     6: _v6,
     7: _v7,
+    8: _v8,
 }
 
 
