@@ -273,3 +273,44 @@ test('P2 — prefilling the form rebuilds both editors from the master', async (
   assert.equal(document.querySelector('#r-work .w-role').value, 'A');
   assert.equal(document.querySelector('#r-education .e-school').value, 'S');
 });
+
+test('F12 — a request in flight looks like one, and a failure offers Retry', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  globalThis.fetch = async (url) => {
+    fetched.push(String(url));
+    await gate;
+    return routeFetch(url);
+  };
+  const pending = M.jobs.loadJobs();
+  assert.ok(document.querySelector('#jobs-tbody .loading-row'),
+            'the table shows a loading state instead of the stale page');
+  release();
+  await pending;
+  assert.ok(document.querySelector('#jobs-tbody tr[data-id]'), 'rows arrive');
+
+  globalThis.fetch = async () => { throw new Error('boom'); };
+  await M.jobs.loadJobs();
+  const err = document.querySelector('#jobs-tbody .error-row');
+  assert.ok(err, 'a failed request is an error row, not a raw string in the body');
+  assert.match(err.textContent, /boom/);
+  const retry = document.querySelector('#retry-jobs');
+  assert.ok(retry, 'the error row carries a Retry button');
+});
+
+test('B11 — the CSV URL carries the filters on screen', async () => {
+  // jsdom refuses navigation, so watch for the download anchor it clicks
+  const hits = [];
+  document.addEventListener('click', (e) => {
+    if (e.target.tagName === 'A' && e.target.hasAttribute('download')) hits.push(e.target.href);
+  });
+  M.core.state.search = 'bookkeeper';
+  M.core.state.hideReposts = true;
+  M.core.state.minAts = true;
+  M.core.state.minAtsValue = 35;
+  document.querySelector('#btn-export').click();
+  const url = hits.at(-1) || '';
+  assert.match(url, /\/api\/jobs\/export\?.*search=bookkeeper/);
+  assert.match(url, /hide_reposts=1/);
+  assert.match(url, /min_fit=35/);
+});

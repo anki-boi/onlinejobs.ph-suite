@@ -6,11 +6,11 @@ import hashlib
 import io as _io
 import sqlite3
 
-from fastapi import HTTPException, Request
+from fastapi import Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 from fastapi.routing import APIRouter
 from app import events as events_hub
-from app.schemas import FollowUpUpdate, NotesUpdate, StatusUpdate
+from app.schemas import FollowUpUpdate, NotesUpdate, StatusUpdate, JobQuery
 
 from app import server as srv
 from db.repos import jobs as job_repo
@@ -18,90 +18,67 @@ from db.repos import jobs as job_repo
 router = APIRouter(tags=['Jobs'])
 
 _EXPORT_COLS = ["id", "job_id", "title", "company", "description", "salary",
+                "salary_monthly_min", "salary_monthly_max", "salary_currency",
                 "location", "hours_per_week", "work_type", "posted_date",
-                "date_updated", "skills", "status", "notes", "follow_up"]
+                "date_updated", "skills", "search_category", "status", "notes",
+                "follow_up", "repost_of", "filter_hidden", "pre_filter_status",
+                "scrape_status", "ats_fit", "ats_total", "ats_profile"]
+
+
+def _filtered_jobs(q: JobQuery):
+    """The one place that turns a JobQuery into rows — shared by the page and the
+    CSV so the two can't drift (B11)."""
+    conn = srv.get_db()
+    from app.services import ats_cache
+    ats_cache.ensure_fresh(
+        conn, srv._ats_cache_key(conn), srv._masters(),
+        conn.execute("SELECT * FROM jobs"), srv._job_dict_for_resume)
+    return job_repo.get_jobs(
+        conn, page=max(1, q.page), per_page=q.per_page, status=q.status,
+        search=q.search, include_hidden=q.include_hidden,
+        work_type=q.work_type, skill=q.skill, skills=q.skills,
+        categories=q.categories, scrape_status=q.scrape_status,
+        sort=q.sort, order=q.order, title=q.title, company=q.company,
+        salary=q.salary, location=q.location, hours=q.hours,
+        posted_from=q.posted_from, posted_to=q.posted_to,
+        has_salary=q.has_salary, min_ats=q.min_ats, min_fit=q.min_fit,
+        salary_min_monthly=q.salary_min_monthly,
+        salary_max_monthly=q.salary_max_monthly,
+        salary_currency=q.salary_currency, hide_reposts=q.hide_reposts,
+    )
 
 
 @router.get("/api/jobs/export")
-def export_jobs():
+def export_jobs(q: JobQuery = Depends()):
 
-    """Full CSV export of all saved jobs (all statuses)."""
-    conn = srv.get_db()
-    rows = conn.execute(f"SELECT {','.join(_EXPORT_COLS)} FROM jobs ORDER BY id").fetchall()
+    """CSV of the jobs matching the current view — every /api/jobs filter applies, same names, same meaning (B11)."""
 
+    rows, _total = _filtered_jobs(q.model_copy(update={"per_page": 0, "page": 1}))
     output = _io.StringIO()
-    writer = _csv.DictWriter(output, fieldnames=_EXPORT_COLS)
+    writer = _csv.DictWriter(output, fieldnames=_EXPORT_COLS, extrasaction="ignore")
     writer.writeheader()
     for r in rows:
-        writer.writerow(dict(r))
-
-    content = output.getvalue().encode("utf-8")
+        writer.writerow({k: r[k] for k in _EXPORT_COLS})
 
     return Response(
-        content=content,
+        content=output.getvalue().encode("utf-8-sig"),   # BOM: Excel needs it for UTF-8
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="jobs_export.csv"'},
     )
 
 
 @router.get("/api/jobs")
-def list_jobs(request: Request,
-              page: int = 1,
-    per_page: int = 50,
-    status: str | None = None,
-    search: str | None = None,
-    include_hidden: bool = False,
-    work_type: str | None = None,
-    skill: str | None = None,
-    skills: str | None = None,  # comma-separated OR filter
-    categories: str | None = None,  # F5: comma-separated category slugs
-    scrape_status: str | None = None,  # comma-separated, e.g. "Open,Closed"
-    sort: str | None = None,  # any sortable column, else newest-first
-    order: str = "desc",  # asc | desc
-    title: str | None = None,
-    company: str | None = None,
-    salary: str | None = None,
-    location: str | None = None,
-    hours: str | None = None,
-    posted_from: str | None = None,  # inclusive range start (YYYY-MM-DD) on the displayed posted date
-    posted_to: str | None = None,    # inclusive range end
-    has_salary: bool = False,
-    salary_min_monthly: float | None = None,   # job's max (PHP/month) >= this
-    salary_max_monthly: float | None = None,   # job's min (PHP/month) <= this
-    salary_currency: str | None = None,        # comma-separated, e.g. "USD,PHP"
-    min_ats: int = 0,  # hide jobs whose best-profile ATS score is below this
-    min_fit: int = 0,  # P1: hide jobs whose fit (skills+keywords, /60) is below this
-):
+def list_jobs(request: Request, q: JobQuery = Depends()):
 
     """List saved jobs with filters. Paginated: {items, page, per_page, total, next_cursor}; per_page max 500 (bigger is 400); repeat GETs with If-None-Match get 304 until data or query changes."""
 
     # W5.3: per_page is capped — one page must stay small enough to render.
-    if per_page > 500:
+    if q.per_page > 500:
         raise HTTPException(400, "per_page is limited to 500 (use /api/jobs/export for full dumps)")
-    if per_page < 1:
-        per_page = 1
-    page = max(1, page)
+    per_page = max(1, q.per_page)
+    page = max(1, q.page)
     conn = srv.get_db()
-    from app.services import ats_cache
-    ats_cache.ensure_fresh(
-        conn, srv._ats_cache_key(conn), srv._masters(),
-        conn.execute("SELECT * FROM jobs"), srv._job_dict_for_resume)
-    rows, total = job_repo.get_jobs(
-        conn, page=page, per_page=per_page, status=status,
-        search=search, include_hidden=include_hidden,
-        work_type=work_type, skill=skill, skills=skills,
-        categories=categories,
-        scrape_status=scrape_status, sort=sort, order=order,
-        title=title, company=company, salary=salary,
-        location=location, hours=hours,
-        posted_from=posted_from, posted_to=posted_to,
-        has_salary=has_salary,
-        min_ats=min_ats,
-        min_fit=min_fit,
-        salary_min_monthly=salary_min_monthly,
-        salary_max_monthly=salary_max_monthly,
-        salary_currency=salary_currency,
-    )
+    rows, total = _filtered_jobs(q.model_copy(update={"per_page": per_page, "page": page}))
     items = [dict(r) for r in rows]
     payload = {
         "items": items,
@@ -156,6 +133,10 @@ def update_notes(job_pk: int, body: NotesUpdate):
 
     """Set a job note (LLM-extracted or free text)."""
     conn = srv.get_db()
+    # B6: /status checked for existence; these two didn't, so a typo'd id got 200
+    # and the UI said "saved" over a row that doesn't exist.
+    if not job_repo.get_job(conn, job_pk):
+        raise HTTPException(404, "Job not found")
     job_repo.update_notes(conn, job_pk, body.notes)
     return {"ok": True}
 
@@ -165,6 +146,8 @@ def update_follow_up(job_pk: int, body: FollowUpUpdate):
 
     """Set the follow-up date for a job."""
     conn = srv.get_db()
+    if not job_repo.get_job(conn, job_pk):
+        raise HTTPException(404, "Job not found")
     job_repo.update_follow_up(conn, job_pk, body.follow_up)
     return {"ok": True}
 

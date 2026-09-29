@@ -187,8 +187,13 @@ def run_check(body: CheckRequest):
             "SELECT id, job_url, status FROM jobs WHERE job_url != '' ORDER BY id"
         ).fetchall()
     else:
+        # B7: "stale" now means one thing. The manual check used to hardcode 7
+        # days while auto-run obeyed config's enrich_interval_days — same button,
+        # two rules.
+        max_age = body.max_age_days if body.max_age_days is not None \
+            else int(srv._cfg.get("enrich_interval_days", 7) or 7)
         rows = job_repo.get_jobs_needing_enrichment(
-            conn, max_age_days=body.max_age_days,
+            conn, max_age_days=max_age,
             status_filter=["New", "Interested"] if not body.recheck_all else None,
         )
 

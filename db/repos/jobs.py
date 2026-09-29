@@ -193,6 +193,7 @@ def get_jobs(
     has_salary: bool = False,
     min_ats: int = 0,
     min_fit: int = 0,
+    hide_reposts: bool = False,
     salary_min_monthly: float | None = None,
     salary_max_monthly: float | None = None,
     salary_currency: str | None = None,
@@ -314,6 +315,11 @@ def get_jobs(
         )
         params.append(min_fit)
 
+    # F2/B11: "Hide reposts" was a client-side filter over the current page only,
+    # so the CSV and the count disagreed with the screen. Now it is a real filter.
+    if hide_reposts:
+        clauses.append("repost_of IS NULL")
+
     if search:
         like = f"%{search}%"
         clauses.append("(title LIKE ? OR company LIKE ? OR description LIKE ? OR search_keyword LIKE ?)")
@@ -368,6 +374,8 @@ def get_jobs(
         order_by = "date_found DESC"
 
     offset = (page - 1) * per_page
+    limit_sql = "" if per_page <= 0 else "LIMIT ? OFFSET ?"
+    tail_params = [] if per_page <= 0 else [per_page, offset]
     # The best-profile score travels with each row: the table showed no ATS at all
     # while filtering on it, which is P1's other half — a filter the user can't see
     # the input for. Correlated subqueries keep one row per job even if an old
@@ -383,8 +391,8 @@ def get_jobs(
         f"{_score('total', 'ats_total')}, "
         f"{_score('fit', 'ats_fit')}, "
         f"{_score('profile', 'ats_profile')} "
-        f"FROM jobs {where} ORDER BY {order_by}, id DESC LIMIT ? OFFSET ?",
-        params + [per_page, offset],
+        f"FROM jobs {where} ORDER BY {order_by}, id DESC {limit_sql}",
+        params + tail_params,
     ).fetchall()
 
     return rows, total

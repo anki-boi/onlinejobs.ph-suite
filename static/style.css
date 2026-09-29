@@ -277,6 +277,12 @@ th.sorted-desc .th-label::after { content: '▼'; }
 .cell-mono  { font-family: var(--mono); font-size: 0.75rem; }
 .cell-date  { font-family: var(--mono); font-size: 0.72rem; color: var(--text3); }
 .empty-row td { text-align: center; padding: 48px; color: var(--text3); font-size: 0.85rem; }
+/* F12: the three states the table used to share one look for — loading, empty,
+   failed. The failure row is red and carries a Retry; loading spins. */
+.loading-row td { text-align: center; padding: 40px; color: var(--text3); font-size: 0.85rem; }
+.loading-row .spinner { display: inline-block; vertical-align: -3px; margin-right: 8px; }
+.error-row td { text-align: center; padding: 40px; color: var(--red); font-size: 0.85rem; }
+.error-row .btn { margin-left: 10px; }
 
 /* ── Scrape status dot ── */
 .scrape-dot {

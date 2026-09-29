@@ -35,6 +35,7 @@ function buildJobsParams(perPage) {
   if (sMax !== '') p.set('salary_max_monthly', sMax);
   if (sCur) p.set('salary_currency', sCur);
   if (state.minAts) p.set('min_fit', state.minAtsValue ?? 20);  // P1: fit, not total
+  if (state.hideReposts) p.set('hide_reposts', '1');            // B11: CSV matches the screen
   if (state.sort) { p.set('sort', state.sort); p.set('order', state.order); }
   return p;
 }
@@ -53,11 +54,18 @@ function renderResultCount() {
 
 let lastView = null;
 
+// F12: a request in flight must look like one. The old code left the previous
+// page on screen while the new one loaded, and turned a failure into a raw
+// error string with no way back.
+const LOADING_ROW = '<tr class="loading-row">'
+  + '<td colspan="9"><span class="spinner"></span>Loading jobs…</td></tr>';
+
 async function loadJobs() {
   const p = buildJobsParams(state.perPage);
   const view = p.toString();
   if (view !== lastView) { lastView = view; state.page = 1; }   // F4
   p.set('page', String(state.page));
+  tbody.innerHTML = LOADING_ROW;
   try {
     const data = await api(`/api/jobs?${p}`);
     renderJobs(data.items);
@@ -67,7 +75,7 @@ async function loadJobs() {
     updateNextHint();
     loadResumeStatus();  // refresh the "target job" dropdown as the list changes
   } catch(e) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">Couldn't load jobs — ${esc(e.message)}
+    tbody.innerHTML = `<tr class="error-row"><td colspan="9">Couldn't load jobs — ${esc(e.message)}
       <button class="btn btn-ghost btn-sm" id="retry-jobs">Retry</button></td></tr>`;
     const b = $('#retry-jobs'); if (b) b.onclick = loadJobs;
   }
@@ -218,9 +226,15 @@ function applyVisibleFilter() {
 }
 
 async function exportCSV() {
-  // B11: the CSV is the view on screen, not the whole table.
-  const p = buildJobsParams(0);
-  window.location = `/api/jobs/export?${p}`;
+  // B11: the CSV is the view on screen, not the whole table. An anchor with
+  // [download] is what actually triggers a save (and what the drawer's .docx
+  // links already do), rather than assigning window.location.
+  const a = document.createElement('a');
+  a.href = `/api/jobs/export?${buildJobsParams()}`;
+  a.download = 'jobs_export.csv';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 function toggleSort(col) {
   const def = SORT_DEFAULT_ORDER[col] || 'asc';

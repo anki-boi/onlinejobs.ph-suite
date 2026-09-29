@@ -18,7 +18,9 @@ class PipelineRequest(BaseModel):
 class CheckRequest(BaseModel):
     workers: int | None = None   # None → use config.json enrich_workers
     recheck_all: bool = False
-    max_age_days: int = 7
+    # B7: "stale" had two meanings — auto-run used config's enrich_interval_days
+    # while the manual button hardcoded 7. None now means "whatever config says".
+    max_age_days: int | None = None
 
 
 class ScrapeScope(BaseModel):
@@ -38,6 +40,44 @@ class StopRequest(BaseModel):
 class ScheduleUpdate(BaseModel):
     enabled: bool | None = None
     interval_hours: int | None = None
+
+
+# ── Job listing filters (B11) ───────────────────────────────────────────────
+
+
+class JobQuery(BaseModel):
+    """Every filter the jobs table exposes, as query params.
+
+    One model, used by both /api/jobs and /api/jobs/export, so the CSV can no
+    longer silently ignore the view on screen (B11): the params are literally the
+    same object, not two lists that drift apart."""
+
+    page: int = 1
+    per_page: int = 50
+    status: str | None = None
+    search: str | None = None
+    include_hidden: bool = False
+    work_type: str | None = None
+    skill: str | None = None
+    skills: str | None = None            # comma-separated OR filter
+    categories: str | None = None        # F5: comma-separated category slugs
+    scrape_status: str | None = None     # comma-separated, e.g. "Open,Closed"
+    sort: str | None = None              # any sortable column, else newest-first
+    order: str = "desc"
+    title: str | None = None
+    company: str | None = None
+    salary: str | None = None
+    location: str | None = None
+    hours: str | None = None
+    posted_from: str | None = None       # inclusive start (YYYY-MM-DD) of posted date
+    posted_to: str | None = None         # inclusive end
+    has_salary: bool = False
+    salary_min_monthly: float | None = None   # job's max (PHP/month) >= this
+    salary_max_monthly: float | None = None   # job's min (PHP/month) <= this
+    salary_currency: str | None = None        # comma-separated, e.g. "USD,PHP"
+    min_ats: int = 0                     # best-profile total >= this
+    min_fit: int = 0                     # P1: fit (skills+keywords, /60) >= this
+    hide_reposts: bool = False           # F2/B11: the table's "Hide reposts" toggle
 
 
 # ── Keyword filters (post-enrichment) ───────────────────────────────────────

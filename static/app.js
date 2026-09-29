@@ -47,7 +47,9 @@ function init() {
     loadJobs();
   });
   $('#filter-hidden').addEventListener('change', e=>{state.includeHidden=e.target.checked;loadJobs();});
-  $('#filter-reposts').addEventListener('change', e=>{state.hideReposts=e.target.checked;applyVisibleFilter();});
+  // B11: "Hide reposts" is a server-side filter now, so the count, the pager and
+  // the CSV all agree with the screen instead of just blanking rows on this page.
+  $('#filter-reposts').addEventListener('change', e=>{state.hideReposts=e.target.checked;loadJobs();});
   $('#filter-min-ats').addEventListener('change', e=>{state.minAts=e.target.checked;loadJobs();});
   // P1: the ATS floor is a slider on `fit` (0-60), not a hard-coded 50/100 that
   // hid nearly every job. Dragging re-queries; the number is echoed next to it.
