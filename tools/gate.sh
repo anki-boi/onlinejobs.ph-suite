@@ -7,6 +7,20 @@ cd "$(dirname "$0")/.."
 ruff check .
 python -m pytest tests/ -q
 
+# F15 (audit): the Python suite is green while the table lies, so the frontend
+# gets its own harness. jsdom is the only dependency; node --test is the runner.
+if command -v node >/dev/null; then
+  if [ -d node_modules/jsdom ]; then
+    node --test tests/js/ui.test.mjs || exit 1
+  else
+    echo "gate: FAIL - node_modules/jsdom missing (run npm install) — frontend tests skipped, not silently passed" >&2
+    exit 1
+  fi
+else
+  echo "gate: FAIL - node not found, frontend tests cannot run" >&2
+  exit 1
+fi
+
 # W2.4: no personal machine paths in tracked source (git grep = tracked only,
 # so config.local.json stays personal; the .json.example placeholder is exempt
 # by the '*.py' pathspec).

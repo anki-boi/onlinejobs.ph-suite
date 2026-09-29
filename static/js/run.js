@@ -30,6 +30,9 @@ async function streamSSE(url, body) {
     // (an abandoned-but-open stream would keep scraping in the background
     // while the UI already shows the run as dead).
     try { await reader.cancel(); } catch {}
+    // F16: a stream that ended without a `done` event used to leave Scrape/Check
+    // disabled until reload. Whatever happens, the run is over when this returns.
+    setScraping(false);
   }
 }
 // Phase-transition log lines get the ▸ accent treatment so the run's
@@ -118,6 +121,12 @@ async function runCheck() {
   } catch(e) { log(`! ${e.message}`,'log-error'); setScraping(false); }
 }
 async function syncAutoRunUI() {
+  // F11: the permission is remembered by the browser, so the button must say
+  // "on" on a reload instead of always offering to enable alerts.
+  const nb = $('#btn-notify');
+  if (nb && 'Notification' in window && Notification.permission === 'granted') {
+    nb.textContent = 'Desktop alerts: on ✓';
+  }
   try {
     const s = await api('/api/schedule');
     $('#auto-run-enabled').checked = s.enabled;

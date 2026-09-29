@@ -13,6 +13,7 @@ const state = {
   includeHidden: false,
   hideReposts: false,
   minAts: false,
+  minAtsValue: 50,       // W-C (P1): the ATS floor is a control, not a hard-coded 50
   total: 0,
   scraping: false,
   activeRun: null,        // 'harvest' | 'check' | null — drives button phase labels
@@ -47,12 +48,18 @@ async function api(path, opts = {}) {
   return res.json();
 }
 function toast(msg, type='info') {
-  toastEl.textContent = msg; toastEl.className = `toast show toast-${type}`;
-  setTimeout(() => toastEl.classList.remove('show'), 2500);
+  // F17: callers said 'ok'/'err', which have no CSS — map them onto the real classes.
+  const kind = ({ ok: 'success', err: 'error' })[type] || type || 'info';
+  toastEl.textContent = msg; toastEl.className = `toast show toast-${kind}`;
+  clearTimeout(toastEl._t);
+  toastEl._t = setTimeout(() => toastEl.classList.remove('show'), 2500);
 }
 function log(msg, cls='') {
   const d = document.createElement('div'); d.className = `log-line ${cls}`; d.textContent = msg;
-  consoleEl.appendChild(d); consoleEl.scrollTop = consoleEl.scrollHeight;
+  consoleEl.appendChild(d);
+  // F10: a 1,000-job run used to append ~4,000 nodes and never let go of them.
+  while (consoleEl.childElementCount > 500) consoleEl.firstElementChild.remove();
+  consoleEl.scrollTop = consoleEl.scrollHeight;
 }
 function fmtDate(s) {
   if (!s) return '';

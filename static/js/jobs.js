@@ -1,19 +1,26 @@
-/* W6.1: jobs table — list, pagination (W6.2), virtual scroll (W6.3), sort, column filters */
-import { state, $, tbody, api, toast, log, esc, fmtDate, COL_VALUES, SORT_DEFAULT_ORDER } from './core.js';
+/* W6.1: jobs table — list, pagination (W6.2), sort, column filters.
+   Audit 2026-09-29 wave W-A: F1 (missing imports), F2 (repost toggle), F3 (count),
+   F4 (page reset), F5/F6 (server-side skills+categories), F7 (dead virtual scroll),
+   F12-lite (retry on load failure). */
+import { state, $, tbody, api, esc, fmtDate, COL_VALUES, SORT_DEFAULT_ORDER } from './core.js';
 import { loadResumeStatus } from './resume.js';
 import { loadStats, updateNextHint } from './stats.js';
+import { renderCats, renderSkills } from './filters.js';
 
 // Shared query builder so the table and the CSV export always see the same view.
+// Page is deliberately NOT part of it: everything else is the view signature, and a
+// changed view resets to page 1 (F4) instead of stranding "page 5 / 1".
 function buildJobsParams(perPage) {
-  const p = new URLSearchParams({page:String(state.page), per_page:String(perPage)});
+  const p = new URLSearchParams({per_page:String(perPage)});
   // status: header filter takes precedence over the toolbar select
   if (state.colFilters.status.length) p.set('status', state.colFilters.status.join(','));
   else if (state.status) p.set('status', state.status);
   if (state.search) p.set('search', state.search);
   if (state.includeHidden) p.set('include_hidden','1');
   if (state.skills.length) p.set('skills', state.skills.join(','));
-  if (state.colFilters.work_type.length) p.set('work_type', state.colFilters.work_type.join(','));
-  if (state.colFilters.scrape.length) p.set('scrape_status', state.colFilters.scrape.join(','));
+  if (state.categories.length) p.set('categories', state.categories.join(','));  // F5
+  for (const k of ['work_type','scrape'])
+    if (state.colFilters[k].length) p.set(k === 'scrape' ? 'scrape_status' : k, state.colFilters[k].join(','));
   for (const k of ['title','company','salary','hours'])
     if (state.colFilters[k]) p.set(k, state.colFilters[k]);
   const pf = state.colFilters.posted || {};
@@ -24,16 +31,33 @@ function buildJobsParams(perPage) {
   const sMin = ($('#filter-salary-min')||{}).value;
   const sMax = ($('#filter-salary-max')||{}).value;
   const sCur = ($('#filter-salary-cur')||{}).value;
-  if (sMin) p.set('salary_min_monthly', sMin);
-  if (sMax) p.set('salary_max_monthly', sMax);
+  if (sMin !== '') p.set('salary_min_monthly', sMin);   // F9: 0 is a real bound
+  if (sMax !== '') p.set('salary_max_monthly', sMax);
   if (sCur) p.set('salary_currency', sCur);
-  if (state.minAts) p.set('min_ats','50');
+  if (state.minAts) p.set('min_ats', state.minAtsValue || 50);
   if (state.sort) { p.set('sort', state.sort); p.set('order', state.order); }
   return p;
 }
 
+// F3: the toolbar count is the global total, never the rows on this page.
+function renderResultCount() {
+  const el = $('#result-count'); if (!el) return;
+  const n = state.total;
+  let txt = n === 1 ? '1 job' : `${n.toLocaleString()} jobs`;
+  const shown = tbody.querySelectorAll('tr[data-id]');
+  let hidden = 0;
+  shown.forEach(r => { if (r.style.display === 'none') hidden++; });
+  if (hidden) txt += ` · ${hidden} repost${hidden > 1 ? 's' : ''} hidden`;
+  el.textContent = txt;
+}
+
+let lastView = null;
+
 async function loadJobs() {
   const p = buildJobsParams(state.perPage);
+  const view = p.toString();
+  if (view !== lastView) { lastView = view; state.page = 1; }   // F4
+  p.set('page', String(state.page));
   try {
     const data = await api(`/api/jobs?${p}`);
     renderJobs(data.items);
@@ -43,7 +67,9 @@ async function loadJobs() {
     updateNextHint();
     loadResumeStatus();  // refresh the "target job" dropdown as the list changes
   } catch(e) {
-    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">${esc(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr class="empty-row"><td colspan="9">Couldn't load jobs — ${esc(e.message)}
+      <button class="btn btn-ghost btn-sm" id="retry-jobs">Retry</button></td></tr>`;
+    const b = $('#retry-jobs'); if (b) b.onclick = loadJobs;
   }
 }
 
@@ -74,18 +100,18 @@ function jobRowHtml(j) {
         ? `<span class="status-badge status-Hidden hidden-by-filter" title="Auto-hidden by keyword rules — was ${esc(j.pre_filter_status||'New')}">Hidden · auto</span>`
         : `<span class="status-badge status-Hidden" title="Hidden by you">Hidden</span>`)
     : `<span class="status-badge status-${j.status}">${j.status}</span>`;
-  return `<tr data-id="${j.id}" data-repost="${j.repost_of||0}" class="${j.status==='Hidden'?'hidden-row':''}">
+  // F2: empty string, not "0" — "0" is a truthy string and used to hide every row.
+  return `<tr data-id="${j.id}" data-repost="${j.repost_of||''}" data-title="${esc(j.title||'')}" tabindex="0" class="${j.status==='Hidden'?'hidden-row':''}">
     <td><span class="scrape-dot ${dot}" title="${dotTitle}"></span></td>
     <td>${badge}</td>
     <td><div class="cell-title">${esc(j.title)||'<em class="text-muted">untitled</em>'} ${repostBadge}</div>${skillsHtml?`<div class="mt-1">${skillsHtml}</div>`:''}</td>
-    <td class="cell-mono">${esc(j.company||'')}</td>
+    <td class="cell-mono">${esc(j.company||'')||'<span class="text-muted">—</span>'}</td>
     <td class="cell-date">${fmtDate(j.posted_date)||fmtDate(j.date_found)}</td>
     <td><span class="work-type ${wtCls}">${wt}</span></td>
     <td class="cell-mono">${esc(j.salary||'')||'<span class="text-muted">—</span>'}${salChip}</td>
-    <td class="cell-mono">${esc(j.hours_per_week||'')}</td>
+    <td class="cell-mono">${esc(j.hours_per_week||'')||'<span class="text-muted">—</span>'}</td>
   </tr>`;
 }
-
 
 // W6.2: pager (Prev / Next) — page state lives in state.page
 function renderPager() {
@@ -93,47 +119,24 @@ function renderPager() {
   const per = Math.max(1, state.perPage);
   const pages = Math.max(1, Math.ceil(state.total / per));
   if (pages <= 1) { el.innerHTML = ''; return; }
-  el.innerHTML = `<button id="pg-prev" ${state.page<=1?'disabled':''}>&#9664;</button>`
+  el.innerHTML = `<button id="pg-prev" ${state.page<=1?'disabled':''} aria-label="Previous page">&#9664;</button>`
     + `<span>page ${state.page} / ${pages}</span>`
-    + `<button id="pg-next" ${state.page>=pages?'disabled':''}>&#9654;</button>`;
+    + `<button id="pg-next" ${state.page>=pages?'disabled':''} aria-label="Next page">&#9654;</button>`;
   $('#pg-prev').onclick = () => { state.page = Math.max(1, state.page-1); loadJobs(); };
   $('#pg-next').onclick = () => { state.page = Math.min(pages, state.page+1); loadJobs(); };
 }
 
-// W6.3: virtual scroll — big pages (>=VS_MIN rows) render only the visible window +
-// buffer; spacer rows keep the scrollbar honest. Small pages render all rows.
-const VS_MIN = 80;
+// F7 (audit D2): the W6.3 virtual scroll was dead code — VS_MIN (80) was unreachable
+// at per_page 50, and its windowed rows broke the visible-count math. Deleted.
 let pageItems = [];
-let vsRowH = 44;  // ponytail: estimated row height, recalibrated by measurement
-let vsAttached = false;
 
 function renderJobs(jobs) {
   pageItems = jobs;
   if (!jobs.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No jobs here — run a scrape, or loosen a filter above.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="9">No jobs match — run a scrape, or loosen a filter above.</td></tr>';
     return;
   }
-  if (jobs.length < VS_MIN) { tbody.innerHTML = jobs.map(jobRowHtml).join(''); return; }
-  virtualRender();
-}
-
-function virtualRender() {
-  const wrap = $('.table-wrap'); if (!wrap) return;
-  const top = Math.max(0, Math.floor(wrap.scrollTop / vsRowH) - 5);
-  const count = Math.ceil((wrap.clientHeight || 600) / vsRowH) + 10;
-  const end = Math.min(pageItems.length, top + count);
-  let html = top > 0 ? `<tr class="vs-spacer" style="height:${top*vsRowH}px"><td colspan="9"></td></tr>` : '';
-  for (let i = top; i < end; i++) html += jobRowHtml(pageItems[i]);
-  if (end < pageItems.length)
-    html += `<tr class="vs-spacer" style="height:${(pageItems.length-end)*vsRowH}px"><td colspan="9"></td></tr>`;
-  tbody.innerHTML = html;
-  // calibrate: rows are variable height (skill tags / salary chip wrap)
-  const rows = [...tbody.querySelectorAll('tr[data-id]')];
-  if (rows.length) {
-    const avg = rows.reduce((s2, r) => s2 + r.offsetHeight, 0) / rows.length;
-    if (avg > 0) vsRowH = Math.max(20, Math.round(avg));
-  }
-  if (!vsAttached) { wrap.addEventListener('scroll', () => virtualRender()); vsAttached = true; }
+  tbody.innerHTML = jobs.map(jobRowHtml).join('');
 }
 
 function insertStubRow(d) {
@@ -161,46 +164,24 @@ function insertStubRow(d) {
   renderJobs(pageItems);
   // Update count
   state.total += 1;
-  $('#result-count').textContent = `${state.total} jobs`;
+  renderResultCount();
   // Update stats bar count
   loadStats();
 }
 
+// F5/F6: skills and categories are filtered by the server now — it can see the whole
+// skills column and search_category, while the browser only ever saw the 3 rendered
+// tags, so a job matching on its 4th tag vanished. What stays here is the one thing
+// the server can't do per-row without a second query: repost hiding (F2).
 function applyVisibleFilter() {
   const rows = tbody.querySelectorAll('tr[data-id]');
-  const activeSkills = state.skills.map(s => s.toLowerCase());
-  const activeCats = state.categories.map(c => c.toLowerCase());
-  
-  let visible = 0;
   rows.forEach(row => {
-    const title = (row.querySelector('.cell-title')?.textContent || '').toLowerCase();
-    const company = (row.cells[3]?.textContent || '').toLowerCase();
-    const skillsText = (row.querySelector('.mt-1')?.textContent || '').toLowerCase();
-    const allText = title + ' ' + company + ' ' + skillsText;
-    
-    let show = true;
-    // Reposts (same title + employer, already listed) hideable on demand
-    if (state.hideReposts && row.dataset.repost) show = false;
-    // If skills selected, row must match at least one
-    if (activeSkills.length) {
-      show = activeSkills.some(sk => allText.includes(sk));
-    }
-    // If categories selected, row must match at least one (check title/company)
-    if (activeCats.length && show) {
-      show = activeCats.some(cat => allText.includes(cat));
-    }
-    
-    row.style.display = show ? '' : 'none';
-    if (show) visible++;
+    row.style.display = (state.hideReposts && row.dataset.repost) ? 'none' : '';
   });
-  
-  // Update count and filter banner
-  const total = rows.length;
-  $('#result-count').textContent = activeSkills.length || activeCats.length
-    ? `${visible} of ${total} jobs (filtered)`
-    : `${total} jobs`;
-  
-  // Show/hide filter banner
+  renderResultCount();
+
+  // Filter banner (F1: renderCats/renderSkills are imported now — they used to be
+  // free identifiers here, so "clear" threw a ReferenceError and did nothing)
   let banner = $('#filter-banner');
   if (!banner) {
     banner = document.createElement('div');
@@ -209,15 +190,14 @@ function applyVisibleFilter() {
     document.querySelector('.toolbar').before(banner);
   }
   const parts = [];
-  if (activeSkills.length) parts.push(`Skills: ${state.skills.join(', ')}`);
-  if (activeCats.length) parts.push(`Categories: ${state.categories.join(', ')}`);
+  if (state.skills.length) parts.push(`Skills: ${state.skills.join(', ')}`);
+  if (state.categories.length) parts.push(`Categories: ${state.categories.join(', ')}`);
   if (parts.length) {
     banner.innerHTML = parts.join(' & ') + ' <button class="filter-clear" id="filter-clear-btn">clear</button>';
     banner.style.display = '';
     $('#filter-clear-btn').onclick = () => {
       state.skills = [];
       state.categories = [];
-      // Uncheck all
       document.querySelectorAll('#skill-list input, #cat-list input').forEach(cb => cb.checked = false);
       renderSkills($('#skill-search').value);
       renderCats($('#cat-search').value);
@@ -230,7 +210,9 @@ function applyVisibleFilter() {
 }
 
 async function exportCSV() {
-  window.location = '/api/jobs/export';
+  // B11: the CSV is the view on screen, not the whole table.
+  const p = buildJobsParams(0);
+  window.location = `/api/jobs/export?${p}`;
 }
 function toggleSort(col) {
   const def = SORT_DEFAULT_ORDER[col] || 'asc';
@@ -251,8 +233,12 @@ function toggleSort(col) {
 function updateSortIndicators() {
   document.querySelectorAll('th.sortable').forEach(th => {
     th.classList.remove('sorted-asc', 'sorted-desc');
-    if (th.dataset.col === state.sort)
+    if (th.dataset.col === state.sort) {
       th.classList.add(state.order === 'asc' ? 'sorted-asc' : 'sorted-desc');
+      th.setAttribute('aria-sort', state.order === 'asc' ? 'ascending' : 'descending');
+    } else {
+      th.setAttribute('aria-sort', 'none');
+    }
   });
 }
 
@@ -288,6 +274,8 @@ function openColFilter(col, th) {
 
   filterPop = document.createElement('div');
   filterPop.className = 'th-filter-pop';
+  filterPop.setAttribute('role', 'dialog');
+  filterPop.setAttribute('aria-label', `Filter by ${col}`);
   if (values) {
     filterPop.innerHTML = `
       <div class="fp-title">Filter by ${col === 'scrape' ? 'scrape status' : col === 'work_type' ? 'work type' : col}</div>
@@ -360,4 +348,4 @@ function openColFilter(col, th) {
   filterPop.querySelector('.fp-text')?.focus();
 }
 
-export { buildJobsParams, loadJobs, renderJobs, virtualRender, renderPager, insertStubRow, applyVisibleFilter, exportCSV, toggleSort, updateSortIndicators, updateFunnelIndicators, closeColFilter, openColFilter };
+export { buildJobsParams, loadJobs, renderJobs, renderPager, insertStubRow, applyVisibleFilter, exportCSV, toggleSort, updateSortIndicators, updateFunnelIndicators, closeColFilter, openColFilter, renderResultCount };

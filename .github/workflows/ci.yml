@@ -25,6 +25,17 @@ jobs:
       - name: Pytest
         run: python -m pytest tests/ -q
 
+  frontend:
+    # F15: the UI bugs a green Python suite cannot see (missing imports, a truthy
+    # "0", a count that reads the DOM) run in jsdom instead.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - run: npm ci || npm install
+      - run: node --test tests/js/ui.test.mjs
+
   install-smoke:
     # A fresh venv, exactly what install.bat installs, must import and boot
     # from a clean HOME (the W1.1 fresh-clone scenario, minus the .bat layer).

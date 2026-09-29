@@ -11,6 +11,10 @@ async function openDetail(id) {
     $('#detail-status').className = `status-badge status-${j.status}`;
     $('#detail-work-type').textContent = j.work_type||'';
     $('#detail-work-type').className = `work-type ${(j.work_type||'').replace(/ /g,'')}`;
+    // F8: show the job's current status instead of always "Change status…" —
+    // you couldn't see where a job stood without guessing from the badge.
+    const dsel = $('#detail-status-select');
+    dsel.value = [...dsel.options].some(o => o.value === j.status) ? j.status : '';
     const hn = $('#detail-hidden-note');
     if (j.status === 'Hidden' && j.filter_hidden) {
       hn.textContent = `Auto-hidden by your keyword rules — it was "${j.pre_filter_status||'New'}" before. Restore it from the Auto-hide panel on the left.`;

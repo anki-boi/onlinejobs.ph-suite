@@ -49,8 +49,12 @@ function init() {
   $('#filter-hidden').addEventListener('change', e=>{state.includeHidden=e.target.checked;loadJobs();});
   $('#filter-reposts').addEventListener('change', e=>{state.hideReposts=e.target.checked;applyVisibleFilter();});
   $('#filter-min-ats').addEventListener('change', e=>{state.minAts=e.target.checked;loadJobs();});
-  for (const id of ['filter-salary-min','filter-salary-max','filter-salary-cur'])
-    $(`#${id}`).addEventListener('change', loadJobs);  // W4.2: money filters
+  // F9: money filters react while typing (debounced like the search box) — the old
+  // `change` listener only fired on blur/Enter, so typing a bound did nothing.
+  let svt;
+  for (const id of ['filter-salary-min','filter-salary-max'])
+    $(`#${id}`).addEventListener('input', ()=>{ clearTimeout(svt); svt=setTimeout(loadJobs,300); });
+  $('#filter-salary-cur').addEventListener('change', loadJobs);  // W4.2: money filters
   $('#filter-has-salary').addEventListener('change', e=>{
     state.hasSalaryOnly = e.target.checked;
     updateFunnelIndicators();
@@ -71,9 +75,14 @@ function init() {
     });
   });
 
-  // Table click
+  // Table click / keyboard (F14: rows are focusable and Enter/Space opens them)
   tbody.addEventListener('click', e=>{
     const row=e.target.closest('tr[data-id]'); if(row) openDetail(+row.dataset.id);
+  });
+  tbody.addEventListener('keydown', e=>{
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const row=e.target.closest('tr[data-id]');
+    if (row) { e.preventDefault(); openDetail(+row.dataset.id); }
   });
 
   // Detail
@@ -97,7 +106,7 @@ function init() {
     toast('Follow-up saved','success');
   });
 
-  // Skills checkboxes — instant filter
+  // Skills checkboxes — server-side filter (F6: no second client-side pass)
   let skt;
   $('#skill-search').addEventListener('input', e=>{clearTimeout(skt); skt=setTimeout(()=>loadSkills(e.target.value),300);});
   $('#skill-list').addEventListener('change', e=>{
@@ -105,18 +114,18 @@ function init() {
     const sk=cb.dataset.skill;
     if(cb.checked) { if(!state.skills.includes(sk)) state.skills.push(sk); }
     else state.skills = state.skills.filter(s=>s!==sk);
-    applyVisibleFilter();
     loadJobs();
   });
 
-  // Categories checkboxes — instant filter
+  // Categories checkboxes — server-side (F5: they used to be a client-side substring
+  // match on title/company text, which hid rows for reasons nobody could name)
   $('#cat-search').addEventListener('input', e=>renderCats(e.target.value));
   $('#cat-list').addEventListener('change', e=>{
     const cb=e.target; if(cb.tagName!=='INPUT') return;
     const cat=cb.dataset.cat;
     if(cb.checked) { if(!state.categories.includes(cat)) state.categories.push(cat); }
     else state.categories = state.categories.filter(c=>c!==cat);
-    applyVisibleFilter();
+    loadJobs();
   });
 
   // Export
