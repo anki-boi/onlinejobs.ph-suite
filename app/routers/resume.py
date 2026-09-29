@@ -12,6 +12,7 @@ from fastapi.routing import APIRouter
 from app.schemas import ResumeUpdate, TailorRequest
 from app import server as srv
 from db.repos import jobs as job_repo
+from db.repos import tailored as tailored_repo
 
 router = APIRouter(tags=['Resume'])
 
@@ -88,14 +89,22 @@ def resume_tailor(body: TailorRequest):
         doc = srv.resume_schema.get_profile(d, name)
     except KeyError as e:
         raise HTTPException(404, f"Unknown profile {e.args[0]!r}")
-    tailored = srv.tailor(doc, jd, llm)
+    # B10: `report` carries why a tailoring was rejected, so the UI can say
+    # "the model made up an employer, so your master was kept" instead of
+    # quietly shipping the guess.
+    report: dict = {}
+    tailored = srv.tailor(doc, jd, llm, report)
+    # B9: store it. The download and the score must be the same document.
+    tailored_repo.put(conn, body.job_id, name, tailored,
+                      job_repo.get_jobs_version(conn))
     return {
         "profile": name,
         "tailored": tailored,
         "changed": tailored != doc,
+        "guard": report.get("guard"),
+        "stored": True,
         "score": srv.resume_ats_mod.score_resume(srv.resume_render.to_txt(tailored), jd),
     }
-
 
 @router.get("/api/resume/export")
 def resume_export(job_id: int, fmt: str = "docx", tailored: int = 0, profile: str = "", auto: int = 0):
@@ -116,10 +125,18 @@ def resume_export(job_id: int, fmt: str = "docx", tailored: int = 0, profile: st
     except KeyError as e:
         raise HTTPException(404, f"Unknown profile {e.args[0]!r}")
     if tailored:
-        llm = srv.LLMClient.from_config(srv._cfg)
-        if llm is None:
-            raise HTTPException(503, "No LLM configured - add llm_base_url/llm_model to config.local.json")
-        m = srv.tailor(m, jd, llm)
+        # B9: serve the document that was scored, not a fresh LLM roll. Only if
+        # nothing is stored for this (job, profile) does export tailor on the fly
+        # — and it stores that result so the next download matches too.
+        stored = tailored_repo.get(conn, job_id, name)
+        if stored is None:
+            llm = srv.LLMClient.from_config(srv._cfg)
+            if llm is None:
+                raise HTTPException(503, "No LLM configured - add llm_base_url/llm_model to config.local.json")
+            m = srv.tailor(m, jd, llm)
+            tailored_repo.put(conn, job_id, name, m, job_repo.get_jobs_version(conn))
+        else:
+            m = stored
     if fmt == "txt":
         body, ctype, ext = srv.resume_render.to_txt(m), "text/plain; charset=utf-8", "txt"
     else:

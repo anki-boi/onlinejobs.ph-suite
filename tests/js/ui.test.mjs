@@ -236,3 +236,40 @@ test('P1 — sorting by Fit asks the server, not the page', async () => {
   await M.jobs.loadJobs();
   assert.match(lastJobsUrl(), /[?&]sort=ats(&|$)/);
 });
+
+test('P2 — the resume editor covers work[] and education[]', async () => {
+  M.resume.renderWorkEditor([{ role: 'Ops VA', company: 'Acme', start: '2021',
+                               end: '2024', bullets: ['Ran ledgers'] }]);
+  M.resume.renderEduEditor([{ school: 'UP', degree: 'BS', year: '2020' }]);
+  const work = M.resume.readWorkEditor();
+  assert.equal(work.length, 1);
+  assert.deepEqual(work[0], { role: 'Ops VA', company: 'Acme', start: '2021',
+                              end: '2024', bullets: ['Ran ledgers'] });
+  assert.deepEqual(M.resume.readEduEditor(),
+                   [{ school: 'UP', degree: 'BS', year: '2020' }]);
+});
+
+test('P2 — add and remove buttons change what gets saved', async () => {
+  M.resume.renderWorkEditor([]);
+  M.resume.renderEduEditor([]);
+  document.querySelector('#btn-add-work').click();
+  document.querySelector('#btn-add-edu').click();
+  assert.equal(document.querySelectorAll('#r-work .work-row').length, 1);
+  assert.equal(document.querySelectorAll('#r-education .edu-row').length, 1);
+  const box = document.querySelector('#r-work .w-role');
+  box.value = 'New Role';
+  document.querySelector('#r-work .w-del').click();
+  assert.deepEqual(M.resume.readWorkEditor(), [], 'removed row is not saved');
+  assert.deepEqual(M.resume.readEduEditor(),
+                   [{ school: '', degree: '', year: '' }].slice(0, 0),
+                   'an untouched education row saves nothing');
+});
+
+test('P2 — prefilling the form rebuilds both editors from the master', async () => {
+  M.resume.prefillResumeForm({ basics: { name: 'J' }, skills: ['Excel'],
+                               work: [{ role: 'A', company: 'B', start: '1', end: '2', bullets: [] }],
+                               education: [{ school: 'S', degree: 'D', year: '3' }] }, 'master');
+  assert.equal(document.querySelectorAll('#r-work .work-row').length, 1);
+  assert.equal(document.querySelector('#r-work .w-role').value, 'A');
+  assert.equal(document.querySelector('#r-education .e-school').value, 'S');
+});

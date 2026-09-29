@@ -20,6 +20,7 @@ from db.migrations.v6_ats_scores import step as _v6
 from db.migrations.v7_perf_indexes import step as _v7
 from db.migrations.v8_company_cleanup import step as _v8
 from db.migrations.v9_ats_fit import step as _v9
+from db.migrations.v10_tailored_resumes import step as _v10
 
 log = logging.getLogger(__name__)
 
@@ -134,6 +135,7 @@ MIGRATIONS: dict[int, callable] = {
     7: _v7,
     8: _v8,
     9: _v9,
+    10: _v10,
 }
 
 

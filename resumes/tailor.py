@@ -3,13 +3,83 @@ resumes/tailor.py — LLM tailoring: master resume + one job → tailored resume
 JSON. The industry-wide rule, enforced in the prompt: rewrite and reorder
 existing content to foreground the job's requirements; NEVER invent facts,
 skills, employers, or numbers.
+
+B10 (audit): the prompt is a wish, not a guard. `validate()` only checks SHAPE,
+so a model that hallucinates "Acme Corp, 2021-2024, +38% conversion" passes and
+the invented facts go straight into the exported document. `faithfulness()` is
+the deterministic check that actually stops it — and the fallback path is the
+same one already used for unparseable JSON: return the master.
 """
 
 import json
+import re
 import urllib.request
 import urllib.error
 
 from .schema import validate
+
+_NUM = re.compile(r"\d[\d,./-]*\d|\d")
+
+
+def _norm_name(s) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(s or "").lower())
+
+
+def _digit_runs(text: str) -> set:
+    return set(_NUM.findall(str(text or "")))
+
+
+def _master_facts(master: dict) -> dict:
+    """Everything the master asserts: names, dates, numbers, skills."""
+    work = master.get("work") or []
+    edu = master.get("education") or []
+    blob = json.dumps(master, ensure_ascii=False)
+    return {
+        "companies": {_norm_name(w.get("company")) for w in work if w.get("company")},
+        "roles": {_norm_name(w.get("role")) for w in work if w.get("role")},
+        "schools": {_norm_name(e.get("school")) for e in edu if e.get("school")},
+        "dates": {str(w.get("start")) for w in work if w.get("start")} |
+                 {str(w.get("end")) for w in work if w.get("end")} |
+                 {str(e.get("year")) for e in edu if e.get("year")},
+        "numbers": _digit_runs(blob),
+        "skills": {_norm_name(s) for s in (master.get("skills") or [])},
+    }
+
+
+def faithfulness(master: dict, out: dict) -> str | None:
+    """Return why `out` is not faithful to `master`, or None if it is.
+
+    The rule the prompt promises, made checkable: no employer, role, school,
+    date, skill or number that the master doesn't already contain. Reordering
+    and rewording are free — facts are not."""
+    f = _master_facts(master)
+
+    for w in out.get("work") or []:
+        c = _norm_name(w.get("company"))
+        if c and c not in f["companies"]:
+            return f"invented employer {w.get('company')!r}"
+        r = _norm_name(w.get("role"))
+        if r and r not in f["roles"]:
+            return f"invented role {w.get('role')!r}"
+        for k in ("start", "end"):
+            v = w.get(k)
+            if v and str(v) not in f["dates"]:
+                return f"invented date {k}={v!r}"
+    for e in out.get("education") or []:
+        s = _norm_name(e.get("school"))
+        if s and s not in f["schools"]:
+            return f"invented school {e.get('school')!r}"
+        if e.get("year") and str(e["year"]) not in f["dates"]:
+            return f"invented year {e['year']!r}"
+
+    for s in out.get("skills") or []:
+        if _norm_name(s) not in f["skills"]:
+            return f"invented skill {s!r}"
+
+    new_numbers = _digit_runs(json.dumps(out, ensure_ascii=False)) - f["numbers"]
+    if new_numbers:
+        return f"invented numbers {sorted(new_numbers)[:4]}"
+    return None
 
 SYSTEM = """You are a resume tailoring engine. You receive a master resume (JSON)
 and a job posting. Rewrite the master resume for THIS job:
@@ -49,9 +119,11 @@ def job_brief(job: dict) -> str:
     return "\n".join(parts)
 
 
-def tailor(resume: dict, job: dict, llm) -> dict:
+def tailor(resume: dict, job: dict, llm, report: dict | None = None) -> dict:
     """Tailor `resume` for `job` via `llm` (duck-typed: .chat(messages) -> str).
-    Any failure or invalid output → return the master unaltered."""
+    Any failure, invalid output, or invented fact → return the master unaltered.
+    `report`, if given, receives why (B10) so the UI can say "the LLM made up a
+    company, so your master was kept" instead of silently shipping the guess."""
     messages = [
         {"role": "system", "content": SYSTEM},
         {"role": "user", "content":
@@ -60,7 +132,9 @@ def tailor(resume: dict, job: dict, llm) -> dict:
     ]
     try:
         raw = llm.chat(messages)
-    except Exception:
+    except Exception as exc:
+        if report is not None:
+            report["guard"] = f"LLM call failed: {type(exc).__name__}"
         return resume
     raw = str(raw).strip()
     if raw.startswith("```"):  # some models fence JSON anyway
@@ -70,9 +144,20 @@ def tailor(resume: dict, job: dict, llm) -> dict:
     try:
         out = json.loads(raw)
     except Exception:
+        if report is not None:
+            report["guard"] = "model did not return JSON"
         return resume
     if validate(out):
+        if report is not None:
+            report["guard"] = "model output failed schema validation"
         return resume
+    reason = faithfulness(resume, out)
+    if reason:
+        if report is not None:
+            report["guard"] = reason
+        return resume
+    if report is not None:
+        report["guard"] = None
     return out
 
 

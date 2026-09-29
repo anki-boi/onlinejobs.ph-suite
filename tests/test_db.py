@@ -583,7 +583,8 @@ class TestVersionedMigrationsW27:
         out = capsys.readouterr().out
         assert "would apply v3" in out
         assert "would apply v4" in out
-        assert "would apply v1" not in out and "would apply v2" not in out
+        # substring-proof: "would apply v1" is also inside "would apply v10"
+        assert "would apply v1:" not in out and "would apply v2:" not in out
 
         # …and it really didn't apply anything
         conn = dbconn.get_conn()

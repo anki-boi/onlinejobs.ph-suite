@@ -79,7 +79,62 @@ function prefillResumeForm(doc, profileName) {
   $('#r-location').value = b.location || '';
   $('#r-summary').value = b.summary || '';
   $('#r-skills').value = ((doc && doc.skills) || []).join('\n');
+  renderWorkEditor(doc && doc.work);
+  renderEduEditor(doc && doc.education);
   $('#resume-edit-profile').textContent = 'Editing: ' + (profileName ? profileName : 'default profile (auto-pick)');
+}
+
+// ── P2: work[] / education[] editors ────────────────────────────────────────
+// These two arrays drive the ATS format+completeness points, the .docx and the
+// CV builder, and the editor used to stop at name/email/skills.
+function workRowHtml(w = {}) {
+  return `<div class="work-row" style="margin-bottom:6px">
+    <input class="input w-role" placeholder="Role" value="${esc(w.role || '')}">
+    <input class="input w-company" placeholder="Company" value="${esc(w.company || '')}">
+    <div class="row">
+      <input class="input w-start" placeholder="start (2021)" value="${esc(w.start || '')}" style="width:49%">
+      <input class="input w-end" placeholder="end (2024)" value="${esc(w.end || '')}" style="width:49%">
+    </div>
+    <textarea class="input w-bullets" rows="3" placeholder="One bullet per line">${esc((w.bullets || []).join('\n'))}</textarea>
+    <button class="btn btn-ghost btn-sm w-del" type="button">remove</button>
+  </div>`;
+}
+
+function eduRowHtml(e = {}) {
+  return `<div class="edu-row" style="margin-bottom:6px">
+    <input class="input e-school" placeholder="School" value="${esc(e.school || '')}">
+    <input class="input e-degree" placeholder="Degree" value="${esc(e.degree || '')}">
+    <input class="input e-year" placeholder="Year" value="${esc(e.year || '')}" style="width:100%">
+    <button class="btn btn-ghost btn-sm e-del" type="button">remove</button>
+  </div>`;
+}
+
+function renderWorkEditor(work) {
+  const box = $('#r-work'); if (!box) return;
+  box.innerHTML = (work || []).map(workRowHtml).join('');
+}
+
+function renderEduEditor(edu) {
+  const box = $('#r-education'); if (!box) return;
+  box.innerHTML = (edu || []).map(eduRowHtml).join('');
+}
+
+function readWorkEditor() {
+  return [...document.querySelectorAll('#r-work .work-row')].map(r => ({
+    role: r.querySelector('.w-role').value.trim(),
+    company: r.querySelector('.w-company').value.trim(),
+    start: r.querySelector('.w-start').value.trim(),
+    end: r.querySelector('.w-end').value.trim(),
+    bullets: r.querySelector('.w-bullets').value.split('\n').map(s => s.trim()).filter(Boolean),
+  })).filter(w => w.role || w.company || w.bullets.length);
+}
+
+function readEduEditor() {
+  return [...document.querySelectorAll('#r-education .edu-row')].map(r => ({
+    school: r.querySelector('.e-school').value.trim(),
+    degree: r.querySelector('.e-degree').value.trim(),
+    year: r.querySelector('.e-year').value.trim(),
+  })).filter(e => e.school || e.degree || e.year);
 }
 
 function formatAts(r) {
@@ -137,6 +192,19 @@ function profileParam() {
 
 function initResumePanel() {
   $('#resume-profile-sel').addEventListener('change', () => loadResumeStatus());
+  // P2: add/remove rows for the two arrays the resume is actually judged on.
+  $('#btn-add-work').addEventListener('click', () => {
+    $('#r-work').insertAdjacentHTML('beforeend', workRowHtml());
+  });
+  $('#btn-add-edu').addEventListener('click', () => {
+    $('#r-education').insertAdjacentHTML('beforeend', eduRowHtml());
+  });
+  $('#r-work').addEventListener('click', e => {
+    if (e.target.classList.contains('w-del')) e.target.closest('.work-row').remove();
+  });
+  $('#r-education').addEventListener('click', e => {
+    if (e.target.classList.contains('e-del')) e.target.closest('.edu-row').remove();
+  });
   $('#btn-save-resume').addEventListener('click', async () => {
     const b = {
       name: $('#r-name').value.trim(),
@@ -148,8 +216,8 @@ function initResumePanel() {
     for (const k of ['name', 'email', 'phone', 'summary'])
       if (!b[k]) { toast('Add your ' + k, 'err'); return; }
     const skills = $('#r-skills').value.split('\n').map(s => s.trim()).filter(Boolean);
-    const base = resumeMaster || {};
-    const master = { basics: b, skills, work: base.work || [], education: base.education || [] };
+    const master = { basics: b, skills,
+                     work: readWorkEditor(), education: readEduEditor() };
     const p = $('#resume-profile-sel').value;
     const btn = $('#btn-save-resume');
     btn.disabled = true;
@@ -182,7 +250,8 @@ function initResumePanel() {
     if (p) body.profile = p; else body.auto = 1;
     try {
       const r = await api('/api/resume/tailor', {method:'POST', body:JSON.stringify(body)});
-      out.textContent = (r.changed ? '' : '(LLM returned the master unchanged — check llm config)\n') + formatAts(r.score);
+      out.textContent = (r.changed ? '' : '(LLM returned the master unchanged — check llm config)\n')
+        + (r.guard ? `(kept your master: ${r.guard})\n` : '') + formatAts(r.score);
       $('#resume-dl-row').style.display = '';
       const pp = p ? `profile=${encodeURIComponent(p)}` : 'auto=1';
       $('#dl-docx').href = `/api/resume/export?job_id=${$('#resume-job-sel').value}&tailored=1&fmt=docx&${pp}`;
@@ -201,8 +270,9 @@ async function detailTailorClick() {
   try {
     const r = await api('/api/resume/tailor', {method:'POST', body:JSON.stringify({job_id: currentJob.id, auto: 1})});
     $('#detail-ats').textContent =
-      (r.changed ? '' : '(LLM returned the master unchanged — check llm config)\n') + formatAts(r.score) +
-      `\nTailored with: ${r.profile}`;
+      (r.changed ? '' : '(LLM returned the master unchanged — check llm config)\n') +
+      (r.guard ? `(kept your master: ${r.guard})\n` : '') +
+      formatAts(r.score) + `\nTailored with: ${r.profile}`;
     const dl = $('#detail-dl-docx');
     dl.href = `/api/resume/export?job_id=${currentJob.id}&tailored=1&fmt=docx&auto=1`;
     dl.style.display = '';
@@ -247,4 +317,4 @@ async function buildCvClick(jobId, auto, btn, statusEl, jobSel) {
 }
 
 
-export { openDetail, closeDetail, prefillResumeForm, formatAts, loadResumeStatus, profileParam, initResumePanel, detailTailorClick, loadBuiltCvs, buildCvClick };
+export { openDetail, closeDetail, prefillResumeForm, formatAts, loadResumeStatus, profileParam, initResumePanel, detailTailorClick, loadBuiltCvs, buildCvClick, renderWorkEditor, renderEduEditor, readWorkEditor, readEduEditor, workRowHtml, eduRowHtml };

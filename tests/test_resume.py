@@ -354,3 +354,160 @@ def test_resume_form_roundtrip_template(client, tmp_path, monkeypatch):
     assert r.json()["basics"]["name"] == "A Stranger"
     assert "n8n" in r.json()["skills"]
     assert r.json()["work"][0]["role"] == "Your Job Title"  # template work preserved
+
+
+# ── B10: the anti-hallucination guard (audit) ───────────────────────────────
+
+from resumes.tailor import faithfulness
+
+
+class CountingLLM:
+    """Returns `payload` on every call and counts them, so a test can prove the
+    document was tailored once, not re-rolled at download time."""
+
+    def __init__(self, payload):
+        self.payload = payload
+        self.calls = 0
+
+    def chat(self, messages):
+        self.calls += 1
+        return json.dumps(self.payload)
+
+
+def _doctored(**changes):
+    out = json.loads(json.dumps(MASTER))
+    out.update(changes)
+    return out
+
+
+def test_guard_rejects_an_invented_employer():
+    out = _doctored(work=MASTER["work"] + [
+        {"role": "Data Analyst", "company": "Acme Corp", "start": "2024",
+         "end": "Present", "bullets": ["Built dashboards"]}])
+    assert "Acme Corp" in faithfulness(MASTER, out)
+
+
+def test_guard_rejects_an_invented_date():
+    out = _doctored(work=[dict(MASTER["work"][0], start="2019")])
+    assert "date" in faithfulness(MASTER, out)
+
+
+def test_guard_rejects_an_invented_number():
+    """The classic hallucination: a metric the resume never claimed."""
+    out = _doctored(work=[dict(MASTER["work"][0], bullets=[
+        "Raised retention by 38% across 12 accounts"])])
+    assert "numbers" in faithfulness(MASTER, out)
+
+
+def test_guard_rejects_an_invented_skill():
+    out = _doctored(skills=MASTER["skills"] + ["Figma"])
+    assert "Figma" in faithfulness(MASTER, out)
+
+
+def test_guard_rejects_an_invented_school():
+    out = _doctored(education=MASTER.get("education", []) + [
+        {"school": "Harvard", "degree": "MBA", "year": "2026"}])
+    assert "school" in faithfulness(MASTER, out)
+
+
+def test_guard_accepts_rewording_that_keeps_the_facts():
+    """Reordering and rephrasing are the whole point of tailoring — the guard must
+    not reject them, or the feature is dead."""
+    out = json.loads(json.dumps(MASTER))
+    out["basics"]["summary"] = "Bookkeeper experienced with Zoho Books and payroll."
+    out["skills"] = list(reversed(MASTER["skills"]))
+    out["work"] = [dict(MASTER["work"][0], bullets=list(reversed(MASTER["work"][0]["bullets"])))]
+    assert faithfulness(MASTER, out) is None
+
+
+def test_tailor_falls_back_to_the_master_and_says_why():
+    bad = _doctored(work=MASTER["work"] + [
+        {"role": "VA", "company": "Made Up Co", "start": "2020", "end": "2021",
+         "bullets": ["Did things"]}])
+    report = {}
+    out = tailor(MASTER, JOB, FakeLLM(payload=bad), report)
+    assert out == MASTER, "an invented employer must not reach the document"
+    assert "Made Up Co" in report["guard"]
+
+
+def test_tailor_keeps_a_faithful_rewrite():
+    good = _doctored(basics=dict(MASTER["basics"],
+                                 summary="Bookkeeper experienced with Zoho Books."))
+    report = {}
+    out = tailor(MASTER, JOB, FakeLLM(payload=good), report)
+    assert out["basics"]["summary"].startswith("Bookkeeper experienced")
+    assert report["guard"] is None
+
+
+# ── B9: the download is the document that was scored ────────────────────────
+
+def test_two_downloads_are_byte_identical(client, conn, tmp_path, monkeypatch):
+    """Export used to call tailor() again — a second LLM roll at temperature 0.2 —
+    so the .docx was not the resume whose ATS score you had just been shown."""
+    mp = tmp_path / "master.json"
+    monkeypatch.setattr("app.server.RESUME_PATH", mp)
+    monkeypatch.setattr("app.server.MASTERS_PATH", tmp_path / "masters.json")
+    seed_master(mp)
+    # The stored master is what the guard compares against, so register the
+    # fixture as the "master" profile instead of the seeded placeholder.
+    assert client.put("/api/resume", json={"master": MASTER, "profile": "master"}).status_code == 200
+    doc = json.loads(json.dumps(MASTER))
+    doc["basics"]["summary"] = "Bookkeeper experienced with Zoho Books and payroll."
+    llm = CountingLLM(doc)
+    monkeypatch.setattr("app.server.LLMClient.from_config", staticmethod(lambda cfg: llm))
+    monkeypatch.setattr("app.server._cfg", {"llm_base_url": "http://x"})
+
+    pk = conn.execute(
+        "INSERT INTO jobs (job_id, job_url, title, status, search_keyword, skills, salary, description, scrape_status) "
+        "VALUES (9100, 'http://x', 'Bookkeeper', 'Open', ?, ?, ?, ?, 'Open')",
+        (JOB["keywords"], json.dumps(JOB["skills"]), JOB["salary"], JOB["description"]),
+    ).lastrowid
+    conn.commit()
+
+    r = client.post("/api/resume/tailor", json={"job_id": pk, "profile": "master"})
+    assert r.status_code == 200 and r.json()["stored"] is True
+    first = client.get("/api/resume/export",
+                       params={"job_id": pk, "fmt": "txt", "tailored": 1, "profile": "master"})
+    second = client.get("/api/resume/export",
+                        params={"job_id": pk, "fmt": "txt", "tailored": 1, "profile": "master"})
+    assert first.status_code == second.status_code == 200
+    assert first.text == second.text, "two downloads of the same tailored resume differ"
+    assert "Zoho Books and payroll" in first.text
+    assert llm.calls == 1, "the LLM ran once; export served the stored document"
+
+
+def test_export_needs_no_llm_once_the_tailoring_is_stored(client, conn, tmp_path, monkeypatch):
+    mp = tmp_path / "master.json"
+    monkeypatch.setattr("app.server.RESUME_PATH", mp)
+    monkeypatch.setattr("app.server.MASTERS_PATH", tmp_path / "masters.json")
+    seed_master(mp)
+    assert client.put("/api/resume", json={"master": MASTER, "profile": "master"}).status_code == 200
+    doc = json.loads(json.dumps(MASTER))
+    doc["basics"]["summary"] = "Bookkeeper with Zoho Books."
+    llm = CountingLLM(doc)
+    monkeypatch.setattr("app.server.LLMClient.from_config", staticmethod(lambda cfg: llm))
+    monkeypatch.setattr("app.server._cfg", {"llm_base_url": "http://x"})
+
+    pk = conn.execute(
+        "INSERT INTO jobs (job_id, job_url, title, status, search_keyword, skills, salary, description, scrape_status) "
+        "VALUES (9101, 'http://x', 'Bookkeeper', 'Open', ?, ?, ?, ?, 'Open')",
+        (JOB["keywords"], json.dumps(JOB["skills"]), JOB["salary"], JOB["description"]),
+    ).lastrowid
+    conn.commit()
+    client.post("/api/resume/tailor", json={"job_id": pk, "profile": "master"})
+
+    def explode(cfg):
+        raise AssertionError("export must not re-run the LLM")
+    monkeypatch.setattr("app.server.LLMClient.from_config", staticmethod(explode))
+
+    r = client.get("/api/resume/export",
+                   params={"job_id": pk, "fmt": "txt", "tailored": 1, "profile": "master"})
+    assert r.status_code == 200 and "Zoho Books" in r.text
+
+
+def test_v10_table_exists_after_migrate(client):
+    import db.connection as dbconn
+    conn = dbconn.get_conn()
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "tailored_resumes" in tables
