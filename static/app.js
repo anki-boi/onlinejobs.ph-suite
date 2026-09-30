@@ -2,8 +2,8 @@
 import { state, $, api, toast, log, consoleEl, currentJob, detailOverlay, tbody } from './js/core.js';
 import { loadJobs, exportCSV, toggleSort, openColFilter, updateFunnelIndicators, colFilterOpen } from './js/jobs.js';
 import { loadStats, loadConfigBanner } from './js/stats.js';
-import { runPipeline, runCheck, syncAutoRunUI, connectEvents } from './js/run.js';
-import { addChip, applyFilters, restoreFilters, saveScrapeScope, resetAll, loadSavedKeywords, loadScrapeScope, loadCategories, loadSkills, renderCats } from './js/filters.js';
+import { runPipeline, runCheck, syncAutoRunUI, connectEvents, loadRuns } from './js/run.js';
+import { addChip, applyFilters, restoreFilters, saveScrapeScope, resetAll, undoReset, loadSavedKeywords, loadScrapeScope, loadCategories, loadSkills, renderCats } from './js/filters.js';
 import { initResumePanel, loadResumeStatus, loadBuiltCvs, buildCvClick, detailTailorClick, openDetail, closeDetail } from './js/resume.js';
 
 function init() {
@@ -26,6 +26,7 @@ function init() {
   // Auto-run scrape scope + full reset
   $('#btn-save-scope').addEventListener('click', saveScrapeScope);
   $('#btn-reset').addEventListener('click', resetAll);
+  $('#btn-undo-reset').addEventListener('click', undoReset);   // P6
 
   // Harvest
   $('#btn-harvest').addEventListener('click', runPipeline);
@@ -192,6 +193,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
   initResumePanel();
   loadResumeStatus();
   loadBuiltCvs();
+  loadRuns();
   api('/api/resume/yamlcv-status').then(r=>{
     for (const id of ['btn-build-cv','detail-build-cv-btn']) {
       const b = $(`#${id}`);

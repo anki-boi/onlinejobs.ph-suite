@@ -45,6 +45,7 @@ def _filtered_jobs(q: JobQuery):
         salary_min_monthly=q.salary_min_monthly,
         salary_max_monthly=q.salary_max_monthly,
         salary_currency=q.salary_currency, hide_reposts=q.hide_reposts,
+        include_deleted=q.include_deleted,
     )
 
 
@@ -152,6 +153,44 @@ def update_follow_up(job_pk: int, body: FollowUpUpdate):
     return {"ok": True}
 
 
+@router.post("/api/jobs/{job_pk}/recheck")
+def recheck_job(job_pk: int):
+
+    """Re-fetch one job's posting and apply whatever changed (P5) — the drawer button that replaces "run a whole-table Check"."""
+
+    from scraper.parsers import parse_job_detail
+    from app import pipeline_apply
+
+    conn = srv.get_db()
+    row = job_repo.get_job(conn, job_pk)
+    if not row:
+        raise HTTPException(404, "Job not found")
+    if not row["job_url"]:
+        raise HTTPException(400, "This job has no URL to re-check")
+    client = srv.get_client()
+    try:
+        resp = client.get(row["job_url"])
+    except Exception as exc:
+        raise HTTPException(502, f"Site unreachable ({type(exc).__name__}): {exc}")
+    if resp.status_code in (404, 410):
+        d = {"row_id": job_pk, "is_closed": True,
+             "close_reason": f"{resp.status_code} — job removed from site"}
+    else:
+        detail = parse_job_detail(resp.text, url=row["job_url"])
+        d = {"row_id": job_pk, "title": detail.title, "company": detail.company,
+             "description": detail.description, "salary": detail.salary,
+             "hours_per_week": detail.hours_per_week, "work_type": detail.work_type,
+             "date_updated": detail.date_updated, "skills": detail.skills,
+             "category": detail.category, "employer_id": detail.employer_id,
+             "is_closed": detail.is_closed, "close_reason": detail.close_reason}
+    if not pipeline_apply.apply_enrich(conn, d):
+        raise HTTPException(502, "The page parsed no job — the site may have changed")
+    # enrich_job bumps jobs_version itself, so the ATS cache re-scores this row.
+    return {"ok": True, "is_closed": d.get("is_closed", False),
+            "title": d.get("title"), "has_description": bool(d.get("description")),
+            "company": d.get("company")}
+
+
 @router.get("/api/stats")
 def stats():
 
@@ -163,11 +202,13 @@ def stats():
 @router.post("/api/jobs/reset")
 def reset_jobs():
 
-    """Delete all saved jobs (and their history / ATS scores)."""
+    """Soft-delete every saved job (P6): the rows are stamped, not deleted, so the toolbar's Undo gives them back."""
     conn = srv.get_db()
     try:
-        conn.execute("DELETE FROM job_history")  # also FK-cascades from jobs
-        n = conn.execute("DELETE FROM jobs").rowcount
+        # P6: `deleted_at` existed, was indexed, and nothing used it. A reset that
+        # DELETEs 1,232 rows and their history is not a button you get back from.
+        n = conn.execute("UPDATE jobs SET deleted_at = datetime('now') "
+                         "WHERE deleted_at IS NULL").rowcount
         conn.commit()
     except sqlite3.OperationalError as exc:
         conn.rollback()
@@ -175,4 +216,15 @@ def reset_jobs():
             503, f"Database busy ({exc}) — the pipeline may be writing; try again in a moment"
         )
     events_hub.publish("jobs_reset", {"deleted_jobs": n})
-    return {"deleted_jobs": n}
+    return {"deleted_jobs": n, "undo": True}
+
+
+@router.post("/api/jobs/reset/undo")
+def undo_reset_jobs():
+
+    """Bring back everything the last reset hid (P6)."""
+    conn = srv.get_db()
+    n = conn.execute("UPDATE jobs SET deleted_at = NULL WHERE deleted_at IS NOT NULL").rowcount
+    conn.commit()
+    events_hub.publish("jobs_reset", {"restored_jobs": n})
+    return {"restored_jobs": n}

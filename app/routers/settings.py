@@ -66,6 +66,16 @@ def get_schedule():
     }
 
 
+@router.get("/api/runs")
+def list_runs(limit: int = 10):
+
+    """Recent pipeline runs — the answer to "what happened last night?" (P8)."""
+
+    from db.repos import runs as runs_repo
+    conn = srv.get_db()
+    return {"items": [dict(r) for r in runs_repo.recent(conn, limit=limit)]}
+
+
 @router.post("/api/schedule")
 def set_schedule(body: ScheduleUpdate):
 
@@ -95,12 +105,19 @@ def apply_keywords(body: KeywordFilter):
     """
     positive = [k.strip() for k in body.positive if k.strip()]
     negative = [k.strip() for k in body.negative if k.strip()]
-    # Note: applying with NO keywords is not a no-op — it means "no rule hides
-    # anything", so every filter-hidden job is restored. That's the
-    # "I changed my mind" path; the restore flag forces the same outcome
-    # even when keywords are present.
+    if body.clear_rules:
+        # B13: "wipe the rules" is now an explicit verb, not what empty lists
+        # silently meant.
+        positive = negative = []
 
     conn = srv.get_db()
+    if not positive and not negative and not body.restore and not body.clear_rules:
+        # Nothing sent, nothing done. The old behaviour overwrote the stored
+        # rules with nothing and un-hid every filtered job — 850 jobs moved on a
+        # probe that meant to be a no-op.
+        return {"hidden_by_negative": 0, "hidden_by_positive": 0, "total_hidden": 0,
+                "restored": 0, "noop": True,
+                "still_filter_hidden": kw.filter_hidden_count(conn)}
     try:
         # Persist the rules: the auto-run re-applies them after every harvest,
         # and the UI hydrates its inputs from GET /api/keywords on load.

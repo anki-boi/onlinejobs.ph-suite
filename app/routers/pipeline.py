@@ -16,9 +16,8 @@ from app import server as srv
 router = APIRouter(tags=['Pipeline'])
 
 
-def _acquire_pipeline(conn, run_id, token, client, scope=None):
-    """Take the pipeline for one run. Returns (events, acquired) — events are the
-    SSE lines for a run that couldn't start; begin_run ran when acquired."""
+def _acquire_pipeline(conn, run_id, token, client, scope=None, kind="harvest"):
+    """Take the pipeline for one run; returns (sse_lines_for_a_busy_run, acquired)."""
     if not scheduler.pipeline_lock.acquire(blocking=False):
         return [sse("error", "Another run is in progress (auto-run or another tab) — try again shortly"),
                 sse("done", "busy")], False
@@ -33,7 +32,7 @@ def _acquire_pipeline(conn, run_id, token, client, scope=None):
         scheduler.pipeline_lock.release()
         return [sse("error", f"{msg} — try again shortly"), sse("done", "busy")], False
     # W2.8: this run owns the pipeline now — Stop reaches exactly this run.
-    scheduler.begin_run(run_id, token, client, scope=scope)
+    scheduler.begin_run(run_id, token, client, scope=scope, kind=kind)
     return [], True
 
 
@@ -83,10 +82,8 @@ def run_pipeline(body: PipelineRequest):
     existing_ids = job_repo.get_existing_job_ids(conn)
 
     def generate():
-        # Shared lock with the auto-run scheduler: one scrape at a time.
         if scheduler.is_running() and scheduler.active_scope() == scope:
-            # W5.4 idempotency: an identical run is already in progress —
-            # report its run_id instead of failing with busy.
+            # W5.4 idempotency: an identical run is in progress — report its run_id.
             yield sse("run_id", {"run_id": scheduler.active_run_id,
                                  "status": "already_running"})
             yield sse("done", "already_running")
@@ -96,6 +93,7 @@ def run_pipeline(body: PipelineRequest):
             yield from events
             return
         try:
+            tally = {"new": 0, "seen": 0, "closed": 0, "errors": 0}  # P8: for the runs row
             new_job_ids: list[int] = []
             for event in srv.harvest(client, keyword=keyword, categories=categories or None,
                                      skill_ids=skill_ids or None, posted_since=posted_since,
@@ -115,11 +113,14 @@ def run_pipeline(body: PipelineRequest):
                                                    "posted_date", "salary", "skills", "job_url")}
                                   | {"row_id": row_id})
                     yield sse("harvest_done", {"inserted": inserted, "total": len(event.data.get("stubs", []))})
+                    tally["new"] += inserted
                 elif event.type == "summary":
+                    tally["new"] = event.data.get("new", tally["new"])
+                    tally["seen"] = event.data.get("seen", 0)
                     yield sse("harvest_summary", event.data)
 
             if token.stopped:
-                scheduler.record_run_status(conn, stopped=True)
+                scheduler.record_run_status(conn, stopped=True, summary=tally)
                 yield sse("done", "stopped")
                 return
 
@@ -147,6 +148,8 @@ def run_pipeline(body: PipelineRequest):
                         pipeline_apply.apply_enrich(conn, d)
                         yield sse("enrich_done", {k: v for k, v in d.items() if k != "description"})
                     elif event.type == "summary":
+                        tally["closed"] = event.data.get("closed", 0)
+                        tally["errors"] = event.data.get("errors", 0)
                         yield sse("enrich_summary", event.data)
                 if not token.stopped:
                     neg_h, pos_h, restored = pipeline_apply.apply_saved_keyword_rules(conn)
@@ -154,7 +157,7 @@ def run_pipeline(body: PipelineRequest):
                         yield sse("log", f"Keyword rules: {neg_h + pos_h} hidden, {restored} restored")
 
             stopped = token.stopped
-            scheduler.record_run_status(conn, stopped=stopped)
+            scheduler.record_run_status(conn, stopped=stopped, summary=tally)
             yield sse("done", "stopped" if stopped else "complete")
         except Exception as exc:
             scheduler.record_run_status(conn, error=str(exc))
@@ -182,8 +185,7 @@ def run_check(body: CheckRequest):
             "SELECT id, job_url, status FROM jobs WHERE job_url != '' ORDER BY id"
         ).fetchall()
     else:
-        # B7: one definition of stale — config's enrich_interval_days, not a
-        # hardcoded 7 that only the manual button believed.
+        # B7: one definition of stale — config's enrich_interval_days.
         cfg_age = int(srv._cfg.get("enrich_interval_days", 7) or 7)
         max_age = body.max_age_days if body.max_age_days is not None else cfg_age
         rows = job_repo.get_jobs_needing_enrichment(
@@ -199,7 +201,7 @@ def run_check(body: CheckRequest):
         jobs_to_check = [t for t in jobs_to_check if t[1].startswith(base + '/')]
 
     def generate():
-        events, acquired = _acquire_pipeline(conn, run_id, token, client)
+        events, acquired = _acquire_pipeline(conn, run_id, token, client, kind="check")
         if not acquired:
             yield from events
             return

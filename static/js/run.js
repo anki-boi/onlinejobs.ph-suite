@@ -1,10 +1,10 @@
 /* W6.1: pipeline actions (scrape/check SSE), auto-run status, event hub wiring */
-import { state, $, api, toast, log, consoleEl, PHASE_RE } from './core.js';
+import { state, $, api, toast, log, consoleEl, PHASE_RE, esc } from './core.js';
 import { loadJobs, insertStubRow } from './jobs.js';
 import { loadStats, updateNextHint } from './stats.js';
 import { loadResumeStatus } from './resume.js';
 
-async function streamSSE(url, body) {
+async function streamSSE(url, body, onEvent) {
   const res = await fetch(url, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body||{})});
   if (!res.ok) { const e=await res.json().catch(()=>({})); throw new Error(e.detail||res.statusText); }
   const reader = res.body.getReader();
@@ -21,7 +21,7 @@ async function streamSSE(url, body) {
         if (t.startsWith('event:')) ev = t.slice(6).trim();
         else if (t.startsWith('data:')) {
           let d; try { d=JSON.parse(t.slice(5).trim()); } catch { d=t.slice(5).trim(); }
-          handleSSE(ev, d);
+          if (onEvent) onEvent(ev, d); else handleSSE(ev, d);
         }
       }
     }
@@ -75,7 +75,7 @@ function handleSSE(ev, d) {
     case 'done': {
       log(`Done: ${typeof d==='string'?d:''}`, 'log-done');
       setScraping(false);
-      loadJobs(); loadStats();
+      loadJobs(); loadStats(); loadRuns();
       // If skills were selected, auto-filter the table to show matching jobs
       if (state.skills.length) {
         toast(`Showing ${state.skills.length} skill filter(s) applied`, 'info');
@@ -153,6 +153,21 @@ function desktopNotify(title, body) {
   }
 }
 
+// P8: the sidebar's "Recent runs" list — kind, counts, status, error.
+async function loadRuns() {
+  const el = $('#runs-list');
+  if (!el) return;
+  try {
+    const { items } = await api('/api/runs?limit=8');
+    el.innerHTML = items.length ? items.map(r =>
+      `<div class="run-row" title="${esc(r.error || '')}">`
+      + `${esc((r.started || '').slice(5, 16))} · ${esc(r.kind)} · +${r.inserted} new`
+      + ` · ${r.closed} closed · ${r.errors} err`
+      + ` · <b class="run-status run-${esc(r.status)}">${esc(r.status)}</b></div>`).join('')
+      : '<span class="text-muted">No runs yet</span>';
+  } catch (_) { el.textContent = 'Run history unavailable'; }
+}
+
 function connectEvents() {
   const es = new EventSource('/api/events');
   es.addEventListener('new_jobs', (e) => {
@@ -172,7 +187,7 @@ function connectEvents() {
     let d = {}; try { d = JSON.parse(e.data); } catch (_) {}
     const st = $('#auto-run-status');
     if (st) st.textContent = `last run: +${d.inserted||0} new · ${d.closed||0} closed · ${d.errors||0} err`;
-    loadStats(); loadJobs();
+    loadStats(); loadJobs(); loadRuns();
   });
   // F18: the reset endpoint publishes jobs_reset; nothing listened, so the table
   // kept showing 1,232 rows over an empty database until something else refreshed.
@@ -186,4 +201,4 @@ function connectEvents() {
 }
 
 
-export { streamSSE, handleSSE, setScraping, runPipeline, runCheck, syncAutoRunUI, connectEvents };
+export { streamSSE, handleSSE, setScraping, runPipeline, runCheck, syncAutoRunUI, connectEvents, loadRuns };

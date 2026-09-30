@@ -1,5 +1,7 @@
 /* W6.1: resume tailoring, ATS, built CVs, detail panel */
 import { state, $, tbody, api, toast, esc, currentJob, detailPanel, detailOverlay, setCurrentJob } from './core.js';
+// B12: the CV build is an SSE stream now, so it reuses the pipeline's reader.
+import { streamSSE } from './run.js';
 
 async function openDetail(id) {
   try {
@@ -219,6 +221,7 @@ function profileParam() {
 
 function initResumePanel() {
   $('#resume-profile-sel').addEventListener('change', () => loadResumeStatus());
+  $('#detail-recheck-btn').addEventListener('click', detailRecheckClick);   // P5
   // P2: add/remove rows for the two arrays the resume is actually judged on.
   $('#btn-add-work').addEventListener('click', () => {
     $('#r-work').insertAdjacentHTML('beforeend', workRowHtml());
@@ -308,6 +311,28 @@ async function detailTailorClick() {
   btn.textContent = 'Tailor resume for this job';
 }
 
+async function detailRecheckClick() {
+  if (!currentJob?.id) return;
+  const btn = $('#detail-recheck-btn');
+  const out = $('#detail-desc');
+  btn.disabled = true;
+  btn.textContent = 'Re-checking…';
+  try {
+    const r = await api(`/api/jobs/${currentJob.id}/recheck`, { method: 'POST' });
+    await openDetail(currentJob.id);           // show what the site says now
+    toast(r.is_closed ? 'Job is closed on OJ.ph'
+          : r.has_description ? 'Description refreshed'
+          : 'Re-checked — the posting still has no description',
+          r.is_closed ? 'info' : 'ok');
+    loadJobs(); loadStats();
+  } catch (e) {
+    toast(e.message, 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Re-check this job';
+  }
+}
+
 async function loadBuiltCvs() {
   const r = await api('/api/resume/built');
   const list = $('#built-cv-list');
@@ -329,19 +354,34 @@ async function buildCvClick(jobId, auto, btn, statusEl, jobSel) {
   const old = btn.textContent;
   btn.textContent = 'Building…';
   statusEl.textContent = 'Digesting your resume sources, drafting YAML, rendering… the 1-page loop can take a few minutes on local models.';
+  const body = auto ? {job_id: jobId, auto: 1}
+    : {job_id: jobId, profile: jobSel ? jobSel.value : ''};
+  let result = null, err = null;
   try {
-    const body = auto ? {job_id: jobId, auto: 1}
-      : {job_id: jobId, profile: jobSel ? jobSel.value : ''};
-    const r = await api('/api/resume/build', {method:'POST', body: JSON.stringify(body)});
-    statusEl.textContent = `Built in ${r.rounds} round(s) — exactly 1 page. Profile: ${r.profile}. Opening PDF…`;
-    const rounds = r.history.map(h => `  round ${h.round}: ${h.ok ? h.pages + ' page(s)' : 'FAIL ' + (h.error||'').slice(0,120)}`).join('\n');
-    statusEl.appendChild(document.createTextNode('\n' + rounds));
-    window.open(r.url, '_blank');
+    // B12: streamed round by round. The run_started event carries the run_id the
+    // Stop button targets, so a build that's spinning on a local model is stoppable.
+    await streamSSE('/api/resume/build', body, (ev, d) => {
+      if (ev === 'log') statusEl.appendChild(document.createTextNode('\n' + d));
+      else if (ev === 'error') err = (d && d.detail) || String(d);
+      else if (ev === 'done') result = d;
+    });
+    if (err) statusEl.appendChild(document.createTextNode('\n' + err));
+    else if (result && result.stopped)
+      statusEl.appendChild(document.createTextNode(
+        `\nStopped after ${result.rounds} round(s) — draft YAML kept: ${result.name}`));
+    else if (result) {
+      // Appended, not a rewrite: the per-round lines above are the point of B12.
+      statusEl.appendChild(document.createTextNode(
+        `\nBuilt in ${result.rounds} round(s) — exactly 1 page. Profile: ${result.profile}. Opening PDF…`));
+      const rounds = (result.history || []).map(h => `  round ${h.round}: ${h.ok ? h.pages + ' page(s)' : 'FAIL ' + (h.error || '').slice(0, 120)}`).join('\n');
+      if (rounds) statusEl.appendChild(document.createTextNode('\n' + rounds));
+      window.open(result.url, '_blank');
+    }
     loadBuiltCvs();
-  } catch(e) { statusEl.textContent = e.message; }
+  } catch (e) { statusEl.textContent = e.message; }
   btn.disabled = false;
   btn.textContent = old;
 }
 
 
-export { openDetail, closeDetail, prefillResumeForm, formatAts, loadResumeStatus, profileParam, initResumePanel, detailTailorClick, loadBuiltCvs, buildCvClick, renderWorkEditor, renderEduEditor, readWorkEditor, readEduEditor, workRowHtml, eduRowHtml };
+export { openDetail, closeDetail, prefillResumeForm, formatAts, loadResumeStatus, profileParam, initResumePanel, detailTailorClick, loadBuiltCvs, buildCvClick, renderWorkEditor, renderEduEditor, readWorkEditor, readEduEditor, workRowHtml, eduRowHtml, detailRecheckClick };

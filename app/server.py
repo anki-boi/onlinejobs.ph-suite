@@ -283,6 +283,7 @@ def index():
 # Imported last: the routers import the shared names from this module at the
 # top of the file, so every one of those names must already exist by now.
 from app.routers import events as _r_events      # noqa: E402
+from app.routers import cv as _r_cv              # noqa: E402
 from app.routers import jobs as _r_jobs          # noqa: E402
 from app.routers import pipeline as _r_pipeline  # noqa: E402
 from app.routers import resume as _r_resume      # noqa: E402
@@ -295,6 +296,7 @@ app.include_router(_r_resume.router)
 app.include_router(_r_settings.router)
 app.include_router(_r_events.router)
 app.include_router(_r_skills.router)
+app.include_router(_r_cv.router)
 
 # Re-exported for callers/tests written before the W5.1 split.
 events_stream = _r_events.events_stream

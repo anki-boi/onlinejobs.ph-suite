@@ -46,6 +46,8 @@ active_run_id: str | None = None
 # W5.4: the scope (keyword/categories/skills/posted_since) of the active run,
 # so an identical POST /api/pipeline/run can be recognized as idempotent.
 active_run_scope: dict | None = None
+# P8: what the run holding the lock was (harvest | check | auto), for the history row
+active_run_kind: str | None = None
 
 
 def new_run_id() -> str:
@@ -57,14 +59,24 @@ def register_run(run_id: str, token: StopToken) -> None:
     active_runs[run_id] = token
 
 
-def begin_run(run_id: str, token: StopToken, client, scope: dict | None = None) -> None:
+def begin_run(run_id: str, token: StopToken, client, scope: dict | None = None,
+              kind: str = "harvest") -> None:
     """Called when a run owns the pipeline lock: register the token, mark the
-    run active, and point the shared client at it."""
-    global active_run_id, active_run_scope
+    run active, and point the shared client at it.
+
+    P8: `kind` is remembered here so the run's history row knows whether it was
+    a harvest, a check or the auto-run — without every call site threading it."""
+    global active_run_id, active_run_scope, active_run_kind
     register_run(run_id, token)
     active_run_id = run_id
     active_run_scope = scope
+    active_run_kind = kind
     client.set_stop(token)
+
+
+def active_run_meta() -> tuple[str, dict | None]:
+    """(kind, scope) of the run holding the pipeline, for the history row."""
+    return (active_run_kind or "harvest"), (active_run_scope if active_run_id else None)
 
 
 def active_scope() -> dict | None:
@@ -74,11 +86,12 @@ def active_scope() -> dict | None:
 
 def end_run(run_id: str) -> None:
     """Run finished (complete/stopped/failed): drop its token."""
-    global active_run_id, active_run_scope
+    global active_run_id, active_run_scope, active_run_kind
     active_runs.pop(run_id, None)
     if active_run_id == run_id:
         active_run_id = None
         active_run_scope = None
+        active_run_kind = None
 
 
 def stop_run(run_id: str | None = None) -> bool:
@@ -107,9 +120,14 @@ def wait_runs(timeout: float) -> bool:
     return True
 
 
-def record_run_status(conn, stopped: bool = False, error: str | None = None) -> None:
+def record_run_status(conn, stopped: bool = False, error: str | None = None, *,
+                      kind: str | None = None, scope: dict | None = None,
+                      summary: dict | None = None) -> None:
     """W2.8: persist a run's outcome. A stopped run is 'stopped' (with its
-    partial results) — never 'failed'. Only a raised error is 'failed'."""
+    partial results) — never 'failed'. Only a raised error is 'failed'.
+
+    P8: it also writes the runs table, so "what happened last night" has an
+    answer instead of one overwritten timestamp."""
     if error:
         settings_repo.set(conn, "last_error", error)
         settings_repo.set(conn, "last_status", "failed")
@@ -117,6 +135,12 @@ def record_run_status(conn, stopped: bool = False, error: str | None = None) -> 
         settings_repo.set(conn, "last_status", "stopped" if stopped else "completed")
         if stopped:
             settings_repo.set(conn, "last_error", "")
+    from db.repos import runs as runs_repo
+    meta_kind, meta_scope = active_run_meta()
+    runs_repo.record(conn, kind or meta_kind,
+                     "failed" if error else ("stopped" if stopped else "completed"),
+                     scope=scope if scope is not None else meta_scope,
+                     summary=summary, error=error)
 
 
 def _defaults_conn():
@@ -198,13 +222,14 @@ def tick(client_factory=None) -> None:
             "skills": json.loads(settings_repo.get(conn, "scrape_skills", "[]") or "[]"),
             "posted_since": None,
         }
-        begin_run(run_id, StopToken(), client, scope=scope)
+        begin_run(run_id, StopToken(), client, scope=scope, kind="auto")
         summary = run_once(client, conn, events.publish, cfg)
-        record_run_status(conn, stopped=client.stopped)
+        record_run_status(conn, stopped=client.stopped, kind="auto",
+                          scope=scope, summary=summary)
         events.publish("schedule_done", {**summary, "run_id": run_id})
     except Exception as exc:
         log.warning(f"auto-run failed: {exc}")
-        record_run_status(conn, error=str(exc))
+        record_run_status(conn, error=str(exc), kind="auto", scope=scope)
         events.publish("alert", {"type": "error", "message": f"auto-run failed: {exc}"})
     finally:
         if run_id is not None:

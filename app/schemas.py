@@ -78,6 +78,7 @@ class JobQuery(BaseModel):
     min_ats: int = 0                     # best-profile total >= this
     min_fit: int = 0                     # P1: fit (skills+keywords, /60) >= this
     hide_reposts: bool = False           # F2/B11: the table's "Hide reposts" toggle
+    include_deleted: bool = False        # P6: show rows a full reset soft-deleted
 
 
 # ── Keyword filters (post-enrichment) ───────────────────────────────────────
@@ -86,6 +87,9 @@ class KeywordFilter(BaseModel):
     positive: list[str] = []
     negative: list[str] = []
     restore: bool = False  # ignore keywords; restore everything hidden by filters
+    # B13: empty lists used to mean "wipe the rules and un-hide everything" — a
+    # silent footgun for anything driving the API. Say it on purpose now.
+    clear_rules: bool = False
 
 
 # ── Job updates ─────────────────────────────────────────────────────────────

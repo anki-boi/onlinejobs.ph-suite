@@ -141,10 +141,22 @@ async function saveScrapeScope() {
   loadScrapeScope();
 }
 async function resetAll() {
-  if (!confirm('Delete ALL job listings?\n\nKept: saved keyword rules, scrape scope, scheduler settings, resume masters, backups.')) return;
+  if (!confirm('Hide every job listing?\n\nNothing is deleted — the toolbar gets an "Undo reset" for this session. Kept: keyword rules, scrape scope, scheduler, resume masters, backups.')) return;
   const b = await (await fetch('/api/jobs/reset', {method: 'POST'})).json();
-  toast(`Deleted ${b.deleted_jobs} job(s). Settings were kept.`, 'success');
+  toast(`Hid ${b.deleted_jobs} job(s). Undo in the toolbar.`, 'success');
+  const undo = document.querySelector('#btn-undo-reset');
+  if (undo) undo.style.display = '';
   loadStats(); loadJobs();
 }
 
-export { applyFilters, restoreFilters, updateFilterHiddenUI, addChip, renderChips, loadCategories, renderCats, loadSkills, renderSkills, loadSavedKeywords, loadScrapeScope, saveScrapeScope, resetAll };
+// P6: a reset is a soft delete, so the one thing the old button never had —
+// a way back — is now a button instead of a restore-from-backup.
+async function undoReset() {
+  const b = await (await fetch('/api/jobs/reset/undo', {method: 'POST'})).json();
+  toast(`Restored ${b.restored_jobs} job(s)`, 'ok');
+  const undo = document.querySelector('#btn-undo-reset');
+  if (undo) undo.style.display = 'none';
+  loadStats(); loadJobs();
+}
+
+export { applyFilters, restoreFilters, updateFilterHiddenUI, addChip, renderChips, loadCategories, renderCats, loadSkills, renderSkills, loadSavedKeywords, loadScrapeScope, saveScrapeScope, resetAll, undoReset };

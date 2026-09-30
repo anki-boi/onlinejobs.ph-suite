@@ -179,6 +179,12 @@
       <button class="btn btn-danger" id="btn-stop" disabled>Stop current run</button>
     </div>
 
+    <!-- P8: "what happened last night?" -->
+    <div class="panel">
+      <div class="panel-header"><h2>Recent runs</h2></div>
+      <div id="runs-list" class="log-line" style="max-height:150px;overflow:auto">Loading…</div>
+    </div>
+
   </aside>
 
   <!-- ═══ Main Content ═══ -->
@@ -234,7 +240,8 @@
         <span class="result-count" id="result-count"></span>
         <span class="pager" id="pager"></span>
         <button class="btn btn-outline btn-sm" id="btn-export">CSV</button>
-        <button class="btn btn-ghost btn-sm" id="btn-reset" style="color:var(--red)" title="Delete every job listing. Keeps saved keyword rules, scrape scope, scheduler, resume masters, backups.">Full reset</button>
+        <button class="btn btn-ghost btn-sm" id="btn-reset" style="color:var(--red)" title="Hide every job listing (soft delete — Undo brings them back). Keeps saved keyword rules, scrape scope, scheduler, resume masters, backups.">Full reset</button>
+        <button class="btn btn-outline btn-sm" id="btn-undo-reset" style="display:none" title="Bring back the jobs the last reset hid">Undo reset</button>
       </div>
     </div>
     <div class="next-hint" id="next-hint" style="display:none"></div>
@@ -316,6 +323,9 @@
       <div class="row mt-2">
         <button class="btn btn-primary btn-sm" id="detail-tailor-btn">Tailor resume for this job</button>
         <button class="btn btn-outline btn-sm" id="detail-build-cv-btn">Build 1-page CV for this job</button>
+        <!-- P5: one job, one click. "Run Check" was the only way to refresh a
+             missing description, and it walks the whole table. -->
+        <button class="btn btn-outline btn-sm" id="detail-recheck-btn" title="Re-fetch this posting from OJ.ph">Re-check this job</button>
         <a class="btn btn-outline btn-sm" id="detail-dl-docx" style="display:none" download>Download tailored .docx</a>
       </div>
     </div>

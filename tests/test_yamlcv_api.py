@@ -54,12 +54,41 @@ def _seed_job(client):
     conn.close()
 
 
-def _fake_build(llm, corpus_text, identity, job_text, out_dir, max_rounds=4):
+def _fake_build(llm, corpus_text, identity, job_text, out_dir, max_rounds=4,
+                should_stop=None):
+    """B12: the build is a generator now — yields events, then the result."""
     (out_dir / "rendercv_output").mkdir(parents=True, exist_ok=True)
     p = out_dir / "rendercv_output" / "cv.pdf"
     _make_pdf(p, 1)
-    return {"ok": True, "pages": 1, "rounds": 1, "yaml": "cv:\n  name: J\n",
-            "pdf": str(p), "history": [{"round": 1, "ok": True, "pages": 1, "pdf": str(p)}]}
+    yield ("log", "draft")
+    yield ("round", {"round": 1, "ok": True, "pages": 1})
+    yield ("result", {"ok": True, "pages": 1, "rounds": 1, "yaml": "cv:\n  name: J\n",
+                      "pdf": str(p),
+                      "history": [{"round": 1, "ok": True, "pages": 1, "pdf": str(p)}]})
+
+
+def _sse_events(text):
+    """Parse an SSE body into (event, data) pairs, JSON-decoding where possible."""
+    import json
+    out, ev = [], ""
+    for line in text.splitlines():
+        if line.startswith("event:"):
+            ev = line[6:].strip()
+        elif line.startswith("data:"):
+            raw = line[5:].strip()
+            try:
+                raw = json.loads(raw)
+            except ValueError:
+                pass
+            out.append((ev, raw))
+    return out
+
+
+def _done_payload(text):
+    for ev, data in _sse_events(text):
+        if ev == "done" and isinstance(data, dict):
+            return data
+    return None
 
 
 def test_build_success_lists_and_serves(client, monkeypatch, tmp_path):
@@ -73,12 +102,12 @@ def test_build_success_lists_and_serves(client, monkeypatch, tmp_path):
     monkeypatch.setattr(resume_digest, "corpus_text", lambda c, **kw: "CORPUS")
     monkeypatch.setattr(srv.LLMClient, "from_config",
                         classmethod(lambda cls, cfg: object()))
-    monkeypatch.setattr(resume_yamlcv, "build_one_pager", _fake_build)
+    monkeypatch.setattr(resume_yamlcv, "iter_one_pager", _fake_build)
 
     r = client.post("/api/resume/build", json={"job_id": 1})
     assert r.status_code == 200, r.text
-    body = r.json()
-    assert body["ok"] and body["profile"] == "master"
+    body = _done_payload(r.text)
+    assert body and body["ok"] and body["profile"] == "master"
     assert body["name"].startswith("AI_Automation") and body["name"].endswith(".pdf")
 
     lst = client.get("/api/resume/built").json()
@@ -110,12 +139,15 @@ def test_build_422_when_loop_fails(client, monkeypatch):
     monkeypatch.setattr(srv.LLMClient, "from_config",
                         classmethod(lambda cls, cfg: object()))
 
-    def fail(llm, corpus, identity, job, out_dir, max_rounds=4):
-        return {"ok": False, "pages": 2, "rounds": 4, "yaml": "y",
-                "pdf": None, "history": [], "error": "still over one page after max rounds"}
-    monkeypatch.setattr(resume_yamlcv, "build_one_pager", fail)
+    def fail(llm, corpus, identity, job, out_dir, max_rounds=4, should_stop=None):
+        yield ("result", {"ok": False, "pages": 2, "rounds": 4, "yaml": "y",
+                          "pdf": None, "history": [],
+                          "error": "still over one page after max rounds"})
+    monkeypatch.setattr(resume_yamlcv, "iter_one_pager", fail)
     r = client.post("/api/resume/build", json={"job_id": 1})
-    assert r.status_code == 422 and "one page" in r.json()["error"]["message"]
+    assert r.status_code == 200
+    errs = [d for ev, d in _sse_events(r.text) if ev == "error"]
+    assert errs and "one page" in errs[0]["detail"]
 
 
 def test_built_list_empty_and_name_traversal_blocked(client):

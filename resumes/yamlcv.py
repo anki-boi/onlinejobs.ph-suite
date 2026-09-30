@@ -103,11 +103,14 @@ def _fenced_yaml(out: str) -> str:
     return (m.group(1) if m else out).strip()
 
 
-def build_one_pager(llm, corpus_text: str, identity: str, job_text: str,
-                    out_dir: Path, max_rounds: int = 4) -> dict:
-    """LLM draft -> render -> page check -> feed back until 1 page.
+def iter_one_pager(llm, corpus_text: str, identity: str, job_text: str,
+                   out_dir: Path, max_rounds: int = 4, should_stop=None):
+    """LLM draft -> render -> page check -> feed back until 1 page, as a generator.
 
-    Returns {ok, pages, rounds, yaml, pdf, history}.
+    B12: the endpoint used to block on this with no progress and no way to stop.
+    Each round is an event the SSE route can stream, and `should_stop()` is
+    checked between rounds so the Stop button means something. Yields
+    ("log"|"round", payload) then a final ("result", {ok, pages, rounds, ...}).
     """
     system = STYLE
     user = (
@@ -117,20 +120,31 @@ def build_one_pager(llm, corpus_text: str, identity: str, job_text: str,
         f"FACT CORPUS (the ONLY facts you may use):\n{corpus_text}\n\n"
         "Write the YAML."
     )
+    yield ("log", "Asking the model for a one-page draft…")
     yaml_text = _fenced_yaml(llm.chat([
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]))
     history, last_pdf = [], None
     for rnd in range(1, max_rounds + 1):
+        if should_stop and should_stop():
+            yield ("result", {"ok": False, "stopped": True,
+                              "pages": history[-1].get("pages", 0) if history else 0,
+                              "rounds": rnd - 1, "yaml": yaml_text, "pdf": last_pdf,
+                              "history": history, "error": "stopped"})
+            return
+        yield ("log", f"Rendering round {rnd}…")
         r = render(yaml_text, out_dir / f"round{rnd}")
         if r.get("pdf"):
             last_pdf = r["pdf"]
         history.append({"round": rnd, **r})
+        yield ("round", {"round": rnd, "ok": r.get("ok"), "pages": r.get("pages")})
         if r["ok"] and r["pages"] <= 1:
-            return {"ok": True, "pages": 1, "rounds": rnd,
-                    "yaml": yaml_text, "pdf": r["pdf"], "history": history}
+            yield ("result", {"ok": True, "pages": 1, "rounds": rnd,
+                              "yaml": yaml_text, "pdf": r["pdf"], "history": history})
+            return
         problem = f"{r['pages']} pages" if r["ok"] else f"render failed: {r['error']}"
+        yield ("log", f"Round {rnd} came out at {problem} — asking for a fix…")
         user = (
             f"Your previous YAML produced {problem}. It must be exactly 1 page.\n"
             f"Fix it: if it overflows, DROP the least job-relevant section items "
@@ -142,6 +156,18 @@ def build_one_pager(llm, corpus_text: str, identity: str, job_text: str,
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]))
-    return {"ok": False, "pages": history[-1].get("pages", 0),
-            "rounds": max_rounds, "yaml": yaml_text, "pdf": last_pdf,
-            "history": history, "error": "still over one page after max rounds"}
+    yield ("result", {"ok": False, "pages": history[-1].get("pages", 0),
+                      "rounds": max_rounds, "yaml": yaml_text, "pdf": last_pdf,
+                      "history": history, "error": "still over one page after max rounds"})
+
+
+def build_one_pager(llm, corpus_text: str, identity: str, job_text: str,
+                    out_dir: Path, max_rounds: int = 4) -> dict:
+    """Blocking wrapper over iter_one_pager (B12 kept the old call sites working)."""
+    out = {"ok": False, "error": "no result", "rounds": 0, "history": [],
+           "yaml": "", "pdf": None, "pages": 0}
+    for kind, payload in iter_one_pager(llm, corpus_text, identity, job_text,
+                                       out_dir, max_rounds):
+        if kind == "result":
+            out = payload
+    return out

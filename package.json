@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Dev-only harness for the frontend smoke tests (tests/js). The app itself ships zero dependencies: static/ is plain ES modules with no build step.",
   "scripts": {
-    "test:js": "node --test tests/js/"
+    "test:js": "node --test tests/js/ui.test.mjs"
   },
   "devDependencies": {
     "jsdom": "^26.1.0"

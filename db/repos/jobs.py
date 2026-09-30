@@ -194,6 +194,7 @@ def get_jobs(
     min_ats: int = 0,
     min_fit: int = 0,
     hide_reposts: bool = False,
+    include_deleted: bool = False,
     salary_min_monthly: float | None = None,
     salary_max_monthly: float | None = None,
     salary_currency: str | None = None,
@@ -214,6 +215,10 @@ def get_jobs(
 
     if not include_hidden:
         clauses.append("status != 'Hidden'")
+
+    # P6: a soft-deleted row is invisible everywhere unless you ask for it.
+    if not include_deleted:
+        clauses.append("deleted_at IS NULL")
 
     if status:
         statuses = _split_multi(status)
@@ -675,18 +680,19 @@ def get_jobs_needing_enrichment(
 def get_stats(conn: sqlite3.Connection) -> dict:
     """Status counts + scrape_status counts + totals."""
     status_rows = conn.execute(
-        "SELECT status, COUNT(*) as c FROM jobs GROUP BY status"
+        "SELECT status, COUNT(*) as c FROM jobs WHERE deleted_at IS NULL GROUP BY status"
     ).fetchall()
     stats = {r["status"]: r["c"] for r in status_rows}
     stats["total"] = sum(stats.values())
 
     scrape_rows = conn.execute(
-        "SELECT scrape_status, COUNT(*) as c FROM jobs WHERE scrape_status != '' GROUP BY scrape_status"
+        "SELECT scrape_status, COUNT(*) as c FROM jobs "
+        "WHERE scrape_status != '' AND deleted_at IS NULL GROUP BY scrape_status"
     ).fetchall()
     stats["scrape"] = {r["scrape_status"]: r["c"] for r in scrape_rows}
 
     stats["filter_hidden"] = conn.execute(
-        "SELECT COUNT(*) FROM jobs WHERE filter_hidden = 1"
+        "SELECT COUNT(*) FROM jobs WHERE filter_hidden = 1 AND deleted_at IS NULL"
     ).fetchone()[0]
 
     # Active-pipeline jobs whose follow-up date is today or in the past.
@@ -695,7 +701,7 @@ def get_stats(conn: sqlite3.Connection) -> dict:
     stats["follow_ups_due"] = conn.execute(
         "SELECT COUNT(*) FROM jobs WHERE follow_up IS NOT NULL AND follow_up != '' "
         "AND date(follow_up) <= date('now') "
-        "AND status NOT IN ('Hidden', 'Rejected', 'Hired')"
+        "AND status NOT IN ('Hidden', 'Rejected', 'Hired') AND deleted_at IS NULL"
     ).fetchone()[0]
 
     return stats

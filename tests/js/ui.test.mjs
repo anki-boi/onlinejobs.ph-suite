@@ -53,6 +53,8 @@ const ROUTES = {
   '/api/resume/ats': { total: 61, profile: 'master',
                        breakdown: { skills: 30, keywords: 15, format: 10, completeness: 6 },
                        matched_skills: ['Excel'], missing_skills: ['Figma'], suggestions: [] },
+  '/api/runs': { items: [{ started: '2026-09-29 03:00:00', kind: 'auto', status: 'completed',
+                           inserted: 12, closed: 3, errors: 0, error: '' }] },
 };
 
 let fetched = [];
@@ -376,4 +378,59 @@ test('F18 — jobs_reset refreshes the table instead of leaving stale rows', asy
   await tick();
   assert.ok(fetched.some(u => u.startsWith('/api/jobs?')), 'the table reloaded');
   assert.match(document.querySelector('#toast').textContent, /cleared/i, 'and said so');
+});
+
+test('P8 — the sidebar answers "what happened last night?"', async () => {
+  await M.run.loadRuns();
+  const el = document.querySelector('#runs-list');
+  assert.ok(el, 'the Recent runs panel exists');
+  assert.match(el.textContent, /auto/, 'kind');
+  assert.match(el.textContent, /\+12 new/, 'inserted count');
+  assert.match(el.textContent, /completed/, 'status');
+});
+
+test('P6 — a Full reset is undoable, not a bonfire', async () => {
+  globalThis.confirm = () => true;
+  await M.filters.resetAll();
+  const undo = document.querySelector('#btn-undo-reset');
+  assert.ok(undo, 'the Undo button exists');
+  assert.notEqual(undo.style.display, 'none', 'and appears after a reset');
+  fetched = [];
+  await M.filters.undoReset();
+  assert.ok(fetched.includes('/api/jobs/reset/undo'), 'Undo posts to the undo endpoint');
+  assert.equal(undo.style.display, 'none', 'then hides itself');
+});
+
+test('P5 — the drawer re-checks one job instead of running a whole-table Check', async () => {
+  await M.resume.openDetail(100);
+  const btn = document.querySelector('#detail-recheck-btn');
+  assert.ok(btn, 'Re-check button is in the drawer');
+  fetched = [];
+  await M.resume.detailRecheckClick();
+  assert.ok(fetched.includes('/api/jobs/100/recheck'), 'it posts for that job only');
+});
+
+test('B12 — the CV build reports each round instead of a silent spinner', async () => {
+  const chunks = [
+    'event: run_started\ndata: {"run":"resume/build","run_id":"b1"}\n\n',
+    'event: log\ndata: "Rendering round 1…"\n\n',
+    'event: done\ndata: {"ok":true,"rounds":1,"profile":"master","name":"x.pdf",'
+    + '"url":"/api/resume/built/x.pdf","history":[{"round":1,"ok":true,"pages":1}]}\n\n',
+  ];
+  globalThis.fetch = () => ({
+    ok: true, status: 200, json: async () => ({ items: [] }),
+    body: { getReader: () => ({
+      read: async () => chunks.length
+        ? { done: false, value: new TextEncoder().encode(chunks.shift()) }
+        : { done: true },
+      cancel: async () => {},
+    }) },
+  });
+  window.open = () => {};
+  const btn = document.createElement('button');
+  const status = document.createElement('div');
+  await M.resume.buildCvClick(100, true, btn, status, null);
+  assert.match(status.textContent, /Rendering round 1/, 'progress arrives live');
+  assert.match(status.textContent, /Built in 1 round/, 'and the result lands');
+  assert.equal(btn.disabled, false, 'the button comes back');
 });

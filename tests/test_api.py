@@ -219,8 +219,15 @@ class TestKeywordApply:
         res = client.post("/api/keywords/apply", json={"positive": [], "negative": ["xero"]})
         assert res.json()["hidden_by_negative"] == 1
 
-        # Remove the keyword and re-apply (no keywords at all now)
+        # B13: an empty apply is now a no-op — it used to wipe the rules and
+        # un-hide everything on its own. "Forget the rules" is an explicit verb.
         res = client.post("/api/keywords/apply", json={"positive": [], "negative": []})
+        assert res.json()["noop"] is True
+        assert res.json()["restored"] == 0
+
+        # Remove the keyword and clear the rules: the job comes back.
+        res = client.post("/api/keywords/apply",
+                          json={"positive": [], "negative": [], "clear_rules": True})
         assert res.json()["restored"] == 1
         assert res.json()["total_hidden"] == 0
 
