@@ -19,7 +19,7 @@ import db.migrate as dbmigrate  # versioned migration registry (W2.7)
 # Bump when the migration in db/migrate.py changes. A DB file at a lower
 # version runs each unapplied step exactly once, on the next init_db(); a
 # fresh file runs all steps as no-ops and lands at this version.
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -46,6 +46,7 @@ TABLES = """
             status          TEXT    DEFAULT 'New',
             filter_hidden   INTEGER NOT NULL DEFAULT 0,
             pre_filter_status TEXT  DEFAULT '',
+            keyword_hit     TEXT  DEFAULT '',
             date_applied    TEXT    DEFAULT '',
             notes           TEXT    DEFAULT '',
             follow_up       TEXT    DEFAULT '',

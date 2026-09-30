@@ -74,6 +74,10 @@ Configuration lives in `config.json`, overlaid by the gitignored
    `AI` matches "AI", "AI-powered" — never "email" or "chain"; `video` catches
    "Video Editors" but not "videography". Manually set statuses are never
    clobbered by the filter.
+   **Pay goal** (₱/month, in the same panel): a job that matches a Remove keyword but
+   pays at least the goal is **kept** and marked `⚠ kept` instead of vanishing — only a
+   monthly figure the listing itself supports can rescue it. Every hide records the word
+   that caused it (`keyword_hit`), so an auto-hidden row tells you why in its tooltip.
 4. **Track** — click any row for the detail modal: change status
    (New → Interested → Applied → …), notes, follow-up date, and view history.
    The green/red/gray dot shows the site-side state (Open / Closed / unknown).
@@ -272,8 +276,8 @@ python -m db.migrate --dry-run       # show which migration steps a DB would run
 JOBS_DB_PATH=/tmp/sandbox.db python main.py --port 8372   # run against a DB copy
 ```
 
-The gate counts what it runs, and the README has to agree with it: **529 Python tests**
-(`tests/`) and **34 jsdom UI tests** (`tests/js/ui.test.mjs`). Add a test, update the
+The gate counts what it runs, and the README has to agree with it: **536 Python tests**
+(`tests/`) and **36 jsdom UI tests** (`tests/js/ui.test.mjs`). Add a test, update the
 number — `tools/check_readme.py` fails the gate otherwise.
 
 `JOBS_DB_PATH` (absolute, or relative to the project dir) overrides `db_path` —

@@ -90,6 +90,9 @@ class KeywordFilter(BaseModel):
     # B13: empty lists used to mean "wipe the rules and un-hide everything" — a
     # silent footgun for anything driving the API. Say it on purpose now.
     clear_rules: bool = False
+    # X-C (F2): PHP/month. A job that matches a Remove keyword but pays at least this
+    # stays visible. None = leave the stored goal alone; 0 = turn the goal off.
+    pay_goal_monthly: float | None = None
 
 
 # ── Job updates ─────────────────────────────────────────────────────────────

@@ -478,3 +478,17 @@ test('X-A — a listing that states no money says so instead of showing nothing'
     salary_assumed_currency: 0, salary_piece_rate: 0 });
   assert.match(html, /no monthly figure/, 'an explicit absence beats a blank cell');
 });
+
+/* ── X-C: a keyword hide says which word caused it; a pay rescue says it stayed ─ */
+test('X-C — a Remove-keyword job that clears the pay goal is marked kept', () => {
+  const html = SAL({ salary: '₱60,000/mo', salary_monthly_min: 60000, salary_monthly_max: 60000,
+    salary_currency: 'PHP', keyword_hit: 'rescued:crypto ₱60,000/mo' });
+  assert.match(html, /⚠ kept/, 'visible, and labelled');
+  assert.match(html, /matched a Remove keyword but clears your pay goal/);
+});
+
+test('X-C — an auto-hidden row names the keyword that hid it', () => {
+  const html = SAL({ status: 'Hidden', filter_hidden: 1, pre_filter_status: 'New',
+    keyword_hit: 'negative:crypto' });
+  assert.match(html, /Auto-hidden by keyword rules \(negative:crypto\)/, 'the reason is in the tooltip');
+});

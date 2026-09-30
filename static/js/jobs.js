@@ -121,11 +121,17 @@ function jobRowHtml(j) {
   else if (j.salary)
     salChip = `<div class="salary-none" title="${noMonth}">no monthly figure</div>`;
   // Two kinds of hidden: yours (solid) vs keyword auto-hide (dashed, remembers what it was)
+  const why = j.keyword_hit ? ` (${esc(j.keyword_hit)})` : '';
   const badge = j.status === 'Hidden'
     ? (j.filter_hidden
-        ? `<span class="status-badge status-Hidden hidden-by-filter" title="Auto-hidden by keyword rules — was ${esc(j.pre_filter_status||'New')}">Hidden · auto</span>`
+        ? `<span class="status-badge status-Hidden hidden-by-filter" title="Auto-hidden by keyword rules${why} — was ${esc(j.pre_filter_status||'New')}">Hidden · auto</span>`
         : `<span class="status-badge status-Hidden" title="Hidden by you">Hidden</span>`)
     : `<span class="status-badge status-${j.status}">${j.status}</span>`;
+  // X-C (F2): a Remove-keyword match that clears the pay goal is kept, and says why.
+  // Before this it just vanished — the one way to lose a good job quietly.
+  const keptBadge = (j.keyword_hit || '').startsWith('rescued:')
+    ? `<span class="kw-kept" title="${esc(j.keyword_hit)} — matched a Remove keyword but clears your pay goal">⚠ kept</span>`
+    : '';
   // P1: the fit half of the ATS score (skills + keywords, /60). The 40 hygiene
   // points are the same number on every row, so they don't belong in a column
   // whose whole job is "is this worth applying to" — they stay in the tooltip.
@@ -137,7 +143,7 @@ function jobRowHtml(j) {
   return `<tr data-id="${j.id}" data-repost="${j.repost_of||''}" data-title="${esc(j.title||'')}" tabindex="0" class="${j.status==='Hidden'?'hidden-row':''}">
     <td><span class="scrape-dot ${dot}" title="${dotTitle}"></span></td>
     <td>${badge}</td>
-    <td><div class="cell-title">${esc(j.title)||'<em class="text-muted">untitled</em>'} ${repostBadge}</div>${skillsHtml?`<div class="mt-1">${skillsHtml}</div>`:''}</td>
+    <td><div class="cell-title">${esc(j.title)||'<em class="text-muted">untitled</em>'} ${repostBadge}${keptBadge}</div>${skillsHtml?`<div class="mt-1">${skillsHtml}</div>`:''}</td>
     <td class="cell-mono">${esc(j.company||'')||'<span class="text-muted">—</span>'}</td>
     <td class="cell-date">${fmtDate(j.posted_date)||fmtDate(j.date_found)}</td>
     <td><span class="work-type ${wtCls}">${wt}</span></td>

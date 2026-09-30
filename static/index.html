@@ -84,6 +84,12 @@
       </div>
       <div class="keyword-chips" id="neg-chips"></div>
 
+      <div class="divider"></div>
+
+      <label class="field-label" for="pay-goal-input">Pay goal — rescue by pay (₱/month)</label>
+      <p class="panel-hint" style="margin-bottom:4px">A job matching a Remove keyword but paying at least this stays visible, marked <b>⚠ kept</b>. Only a monthly figure the listing itself states can rescue it. 0 turns this off.</p>
+      <input type="number" id="pay-goal-input" class="input" min="0" step="1000" placeholder="e.g. 40000">
+
       <button class="btn btn-outline mt-2" id="btn-apply-filters">Apply auto-hide</button>
       <p class="panel-hint mt-2" id="filter-hidden-hint" style="display:none"></p>
       <button class="btn btn-ghost mt-1" id="btn-restore-filters" style="display:none">Restore auto-hidden jobs</button>

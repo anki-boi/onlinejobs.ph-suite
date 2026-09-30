@@ -8,9 +8,11 @@ async function applyFilters() {
   const neg = state.negFilters;
   if (!pos.length && !neg.length) { toast('No filters set','info'); return; }
   try {
-    const res = await api('/api/keywords/apply', {method:'POST', body:JSON.stringify({positive:pos, negative:neg})});
+    const goal = Number($('#pay-goal-input').value || 0);
+    const res = await api('/api/keywords/apply', {method:'POST', body:JSON.stringify({positive:pos, negative:neg, pay_goal_monthly:goal})});
     const bits = [`Hidden: ${res.total_hidden}`];
     if (res.restored) bits.push(`restored: ${res.restored}`);
+    if (res.rescued) bits.push(`kept by pay: ${res.rescued}`);
     toast(bits.join(' '), 'success');
     updateFilterHiddenUI(res.still_filter_hidden);
     loadJobs(); loadStats();
@@ -108,6 +110,8 @@ async function loadSavedKeywords() {
       state.negFilters = b.negative;
       renderChips();
     }
+    const goalEl = $('#pay-goal-input');
+    if (goalEl && b.pay_goal_monthly) goalEl.value = b.pay_goal_monthly;
     if (b.still_filter_hidden) {
       const h = $('#filter-hidden-hint');
       h.style.display = 'block';

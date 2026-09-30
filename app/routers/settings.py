@@ -111,6 +111,9 @@ def apply_keywords(body: KeywordFilter):
         positive = negative = []
 
     conn = srv.get_db()
+    if body.pay_goal_monthly is not None:
+        # Stored, not per-request: the auto-run applies the same goal the UI shows.
+        settings_repo.set(conn, "pay_goal_monthly", str(max(0.0, body.pay_goal_monthly)))
     if not positive and not negative and not body.restore and not body.clear_rules:
         # Nothing sent, nothing done. The old behaviour overwrote the stored
         # rules with nothing and un-hid every filtered job — 850 jobs moved on a
@@ -123,7 +126,7 @@ def apply_keywords(body: KeywordFilter):
         # and the UI hydrates its inputs from GET /api/keywords on load.
         settings_repo.set(conn, "positive_keywords", json.dumps(positive))
         settings_repo.set(conn, "negative_keywords", json.dumps(negative))
-        neg_hidden, pos_hidden, restored = kw.apply_keyword_filters(
+        neg_hidden, pos_hidden, restored, rescued = kw.apply_keyword_filters(
             conn, positive, negative, restore_all=body.restore
         )
     except sqlite3.OperationalError as exc:
@@ -136,6 +139,8 @@ def apply_keywords(body: KeywordFilter):
         "hidden_by_positive": pos_hidden,
         "total_hidden": neg_hidden + pos_hidden,
         "restored": restored,
+        "rescued": rescued,
+        "pay_goal_monthly": kw.stored_pay_goal(conn),
         "still_filter_hidden": kw.filter_hidden_count(conn),
     }
 
@@ -147,6 +152,7 @@ def get_keywords():
     return {
         "positive": json.loads(settings_repo.get(conn, "positive_keywords", "[]") or "[]"),
         "negative": json.loads(settings_repo.get(conn, "negative_keywords", "[]") or "[]"),
+        "pay_goal_monthly": kw.stored_pay_goal(conn),
         "still_filter_hidden": kw.filter_hidden_count(conn),
     }
 

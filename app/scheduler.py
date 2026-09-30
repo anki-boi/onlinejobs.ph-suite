@@ -315,12 +315,20 @@ def run_once(client, conn, publish, cfg: dict | None = None) -> dict:
     neg = json.loads(settings_repo.get(conn, "negative_keywords", "[]") or "[]")
     if pos or neg:
         from app.services.keywords import apply_keyword_filters  # no server dependency (W5.1)
-        neg_h, pos_h, _restored = apply_keyword_filters(conn, pos, neg)
+        neg_h, pos_h, _restored, rescued = apply_keyword_filters(conn, pos, neg)
         auto_hidden = neg_h + pos_h
         if auto_hidden:
             publish("alert", {
                 "type": "keyword_filter", "count": auto_hidden,
                 "message": f"{auto_hidden} job(s) auto-hidden by saved keyword rules",
+            })
+        if rescued:
+            # F2: a Remove-keyword match that clears the pay goal stayed visible.
+            # Silence here is how good jobs got lost without anyone noticing.
+            publish("alert", {
+                "type": "keyword_rescue", "count": rescued,
+                "message": f"{rescued} job(s) matched a Remove keyword but clear your "
+                           f"pay goal — kept visible",
             })
 
     # ── Alerts ─────────────────────────────────────────────────────────

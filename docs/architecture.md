@@ -61,7 +61,7 @@ python main.py
 | `POST /api/jobs/reset` | Soft-delete every job + status history (rows stay, `deleted_at` set) — Undo restores them |
 | `POST /api/jobs/reset/undo` | Bring back everything the reset hid |
 | `GET /api/keywords` | Saved keyword rules (auto-hide lists) |
-| `POST /api/keywords/apply` | Apply + persist keyword rules; empty lists are a no-op, `clear_rules: true` is the explicit wipe |
+| `POST /api/keywords/apply` | Apply + persist keyword rules (`pay_goal_monthly` rescues by pay); empty lists are a no-op, `clear_rules: true` is the explicit wipe |
 | `GET /api/scrape-scope` | The persisted auto-run scope |
 | `POST /api/scrape-scope` | Persist the auto-run scope |
 | `GET /api/skills` | Skill taxonomy (local table) |
@@ -124,6 +124,13 @@ support a month (no stated hours, a piece rate, or no live FX rate for that
 currency). `salary_rate_min/max` carry the PHP per hour / per day / per item, which
 stays honest when a month is not. Migration v12 re-derives all of it from the raw
 text; `renormalize()` does the same daily with live rates.
+
+### Keyword rules
+
+`jobs.keyword_hit` (migration v13) records the rule that touched a job: `negative:crypto`,
+`no positive keyword`, or `rescued:crypto ₱60,000/mo` when the listing clears the stored pay
+goal (`settings.pay_goal_monthly`) and so stays visible. A hide that names no word is a hide
+you cannot argue with.
 
 ## Concurrency model
 

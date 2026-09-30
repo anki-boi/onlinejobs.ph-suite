@@ -371,7 +371,7 @@ class TestKeywordMatcher:
 
     def test_ai_whole_word(self):
         from app.server import _keyword_regexes
-        [p] = _keyword_regexes(["AI"])
+        [(_, p)] = _keyword_regexes(["AI"])
         for good in ("AI Data Annotator", "ai-powered video", "Ai.", "  ai  ", "AI models"):
             assert p.search(good.lower()), f"should match: {good!r}"
         for bad in ("Email Support VA", "chain of command", "maintenance", "certain", "emailing"):
@@ -379,7 +379,7 @@ class TestKeywordMatcher:
 
     def test_plural_and_multiword(self):
         from app.server import _keyword_regexes
-        pcall, pflex = _keyword_regexes(["call", "flexible hours"])
+        (_, pcall), (_, pflex) = _keyword_regexes(["call", "flexible hours"])
         assert pcall.search("phone calls")          # simple plural ok
         assert not pcall.search("calling")          # not a different word
         assert pflex.search("FLEXIBLE HOURS")       # phrase, case-insensitive
