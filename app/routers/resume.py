@@ -198,6 +198,7 @@ class FitListing(BaseModel):
     company: str = ""
     work_type: str = ""
     skills: list[str] = []
+    keywords: str = ""
 
 
 class FitRequest(BaseModel):
@@ -218,15 +219,23 @@ def resume_fit(body: FitRequest):
     masters = srv._masters()
     out = []
     for j in body.jobs:
+        skills = [x for x in (s.strip() for s in j.skills) if x]
         best = srv.resume_schema.best_profile_for_job(masters, {
             "title": j.title, "description": j.description, "salary": j.salary,
             "company": j.company, "work_type": j.work_type,
-            "skills": ", ".join(j.skills or [])})
+            "skills": ", ".join(skills)})
         if best is None:
-            out.append({"profile": None, "fit": None, "total": None, "hygiene": None})
+            out.append({"profile": None, "fit": None, "fit_max": 0, "total": None,
+                        "hygiene": None})
             continue
         name, sc = best
-        out.append({"profile": name, "fit": sc.get("fit", 0), "total": sc["total"],
+        # `fit` is skills (40) + keywords (20). A listing the dashboard never harvested
+        # has no search keyword, so only half of it is scorable — and a listing with no
+        # skill tags either scores nothing at all. Say what was scored instead of
+        # reporting 0/60, which reads as "poor fit" when it means "no data".
+        fit_max = (40 if skills else 0) + (20 if j.keywords else 0)
+        out.append({"profile": name, "fit": sc.get("fit", 0) if fit_max else None,
+                    "fit_max": fit_max, "total": sc["total"],
                     "hygiene": sc.get("hygiene", 0)})
     if not out:
         raise HTTPException(400, "send at least one listing")

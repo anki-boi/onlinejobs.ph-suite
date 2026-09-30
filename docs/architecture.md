@@ -70,7 +70,7 @@ python main.py
 | `GET /api/jobs` | Query: search, status, salary, `min_fit`, `min_ats`, date range, keyword filters, `hide_reposts`, `include_deleted` |
 | `GET /api/jobs/export` | Full CSV (no pagination, same filters as the table, BOM for Excel) |
 | `GET /api/resume` | Master resume (default profile) |
-| `POST /api/resume/fit` | Score listings the browser extension is looking at (X-E bridge, max 50 per request) |
+| `POST /api/resume/fit` | Score listings the browser extension is looking at (X-E bridge, max 50 per request; `fit_max` says how much of the 60-point scale the listing actually made scorable) |
 | `PUT /api/resume` | Save a named profile |
 | `GET /api/resume/profiles` | Named profiles + which is default |
 | `GET /api/resume/ats` | Deterministic ATS score: `fit` (/60) + `hygiene` (/40), `auto=1` = best-fitting profile |

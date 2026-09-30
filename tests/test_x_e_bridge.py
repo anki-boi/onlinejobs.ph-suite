@@ -17,15 +17,35 @@ def conn(tmp_db):
 def test_fit_scores_a_listing_the_dashboard_never_saved(client):
     r = client.post("/api/resume/fit", json={"jobs": [
         {"title": "Executive Assistant", "description": "calendar management, email triage, "
-         "data entry, CRM updates", "salary": "$800/mo"}]})
+         "data entry, CRM updates", "salary": "$800/mo",
+         "skills": ["Microsoft Excel", "Calendar management"],
+         "keywords": "executive assistant"}]})
     assert r.status_code == 200
     body = r.json()
     assert body["count"] == 1
     res = body["results"][0]
     assert res["profile"], "a profile was chosen"
+    assert res["fit_max"] == 60, "skills and keywords were both supplied"
     assert 0 <= res["fit"] <= 60 and 0 <= res["total"] <= 100
     # fit is the job-dependent half; hygiene is the resume's own formatting score
     assert res["total"] == res["fit"] + res["hygiene"]
+
+
+def test_no_data_is_reported_as_no_data_not_as_a_bad_fit(client):
+    """A listing with no skill tags and no keyword scores nothing — and 0/60 would read
+    as 'your resume is a poor fit' when it means 'I was told nothing about this job'."""
+    r = client.post("/api/resume/fit", json={"jobs": [
+        {"title": "Some Job", "description": "no tags supplied"}]})
+    res = r.json()["results"][0]
+    assert res["fit"] is None and res["fit_max"] == 0
+
+
+def test_only_half_the_scale_is_claimed_when_only_half_is_scorable(client):
+    r = client.post("/api/resume/fit", json={"jobs": [
+        {"title": "Some Job", "skills": ["Microsoft Excel"]}]})
+    res = r.json()["results"][0]
+    assert res["fit_max"] == 40, "no keyword supplied, so the keyword half is not claimed"
+    assert 0 <= res["fit"] <= 40
 
 
 def test_fit_is_per_listing_because_the_best_profile_is_per_listing(client):
