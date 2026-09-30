@@ -88,7 +88,7 @@ Configuration lives in `config.json`, overlaid by the gitignored
 4. **Track** — click any row for the detail modal: change status
    (New → Interested → Applied → …), notes, follow-up date, and view history.
    The green/red/gray dot shows the site-side state (Open / Closed / unknown).
-   **Extension bridge** — `POST /api/resume/fit` scores listings the `ojph-cleaner` extension is looking at in the browser (same deterministic scorer as the Fit column, batched per page), and `http://127.0.0.1:8372/?job=<site job id>` opens that saved job in the dashboard.
+   **Extension bridge** — `POST /api/resume/fit` scores listings the `ojph-cleaner` extension is looking at in the browser (same deterministic scorer as the Fit column, batched per page), and `http://127.0.0.1:8371/?job=<site job id>` opens that saved job in the dashboard (the extension's `dashboardUrl` defaults to the same port).
 5. **Check for updates** — re-fetches detail pages for jobs whose check is stale
    (or never checked). Deleted listings (HTTP 404/410, "no longer available" wording)
    are marked **Closed**. **Stop** aborts a run mid-flight; the console says how
