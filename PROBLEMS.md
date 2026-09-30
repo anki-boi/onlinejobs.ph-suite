@@ -21,10 +21,13 @@ resource I needed for it.
 A listing tells you the title and a company. It doesn't tell you whether *your* résumé
 matches it. So the decision becomes a feeling, and feelings degrade over a list of hundreds.
 
-→ **A deterministic ATS score per listing** — `skills 40 + keywords 20 + format 25 +
-completeness 15`, returned with the matched *and missing* skills and rule-based
-suggestions. Shown in the job drawer, filterable with **ATS ≥ 50** to collapse the list to
-the jobs worth reading.
+→ **A deterministic ATS score per listing** — reported as its two halves: **fit**
+(`skills 40 + keywords 20`, out of 60 — the part that changes per job) and **hygiene**
+(`format 25 + completeness 15`, out of 40 — a property of your resume, identical for
+every job), returned with the matched *and missing* skills and rule-based suggestions.
+Shown in the job drawer, filterable with the **Fit slider** (`min_fit`) to collapse the
+list to the jobs worth reading — filtering on fit, because a total cut is mostly your own
+resume moving the line.
 
 → **Deliberately not an LLM scorer.** Recruiter-side first passes are keyword and structure
 based, so a rule scorer models the actual thing. More importantly, **a rule scorer cannot
@@ -132,7 +135,7 @@ snapshot back over the database.
 | Before | After |
 |---|---|
 | Scrolling and opening a hundred tabs to reject ninety | Keyword/category/skill scoping, column funnels, date-range and salary filters |
-| "Does my résumé fit this?" — a feeling | Deterministic ATS score with matched/missing skills, filterable at ≥ 50 |
+| "Does my résumé fit this?" — a feeling | Deterministic ATS score with matched/missing skills, filterable with the Fit slider |
 | One generic résumé sent to everything | One-click tailoring per listing, facts-only, exporting ATS-friendly docx |
 | A two-page CV uploaded into a one-page ATS rule | A builder that iterates until it is exactly one page |
 | Mixed currencies compared mentally | Normalized monthly chips with the rate and its timestamp recorded |
@@ -147,7 +150,7 @@ snapshot back over the database.
 
 ## Engineering decisions worth pointing at
 
-- **359 tests, no network.** The suite covers DB, parsers, pipeline, API, salary maths,
+- **431 Python tests + 30 jsdom UI tests, no network.** The suite covers DB, parsers, pipeline, API, salary maths,
   résumé rendering and YAML CV. `tools/gate.sh` runs ruff + the full suite + a
   personal-path scan + **a README-truthfulness check** (`tools/check_readme.py` verifies
   every config key is documented and no counts are stale).

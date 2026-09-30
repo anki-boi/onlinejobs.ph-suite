@@ -48,23 +48,38 @@ python main.py
 | `POST /api/pipeline/run` | Scrape with scope `{keyword, categories, skills, posted_since}`; SSE stream of the run |
 | `POST /api/pipeline/check` | Re-check stale detail pages; SSE stream |
 | `POST /api/pipeline/stop` | `{run_id}` stop that run; no body → active run |
-| `GET /api/events` | Long-lived SSE: new-job batches, closures, salary changes, due follow-ups, structure-change alerts, auto-run keyword hides |
-| `GET/POST /api/schedule` | Auto-run on/off, interval 1–24 h, last run/status |
+| `GET /api/events` | Long-lived SSE: new-job batches, closures, salary changes, due follow-ups, structure-change alerts, auto-run keyword hides, reset alerts |
+| `GET /api/schedule` | Auto-run state: on/off, interval, last run/status |
+| `POST /api/schedule` | Set auto-run on/off, interval 1–24 h |
+| `GET /api/runs` | Recent runs: kind (harvest/check/auto), scope, inserted/enriched/closed/errors, completed/stopped/failed |
 | `GET /api/jobs/{job_pk}` | One job by DB row id |
+| `PATCH /api/jobs/{job_pk}/status` | Set status (New / Applied / Interview / Hired / Rejected / Hidden) |
+| `PATCH /api/jobs/{job_pk}/notes` | Owner notes (404 if the job is gone) |
+| `PATCH /api/jobs/{job_pk}/follow-up` | Follow-up date (404 if the job is gone) |
+| `POST /api/jobs/{job_pk}/recheck` | Re-fetch that job's detail page now and apply it (closed on 404/410) |
 | `GET /api/stats` | Table counters for the UI header |
-| `POST /api/jobs/reset` | Delete every job + status history (keeps rules/scope/scheduler/resumes) |
+| `POST /api/jobs/reset` | Soft-delete every job + status history (rows stay, `deleted_at` set) — Undo restores them |
+| `POST /api/jobs/reset/undo` | Bring back everything the reset hid |
 | `GET /api/keywords` | Saved keyword rules (auto-hide lists) |
-| `POST /api/keywords/apply` | Apply + persist keyword rules |
-| `GET/POST /api/scrape-scope` | Persist the auto-run scope |
-| `GET /api/skills`, `GET /api/skills/categories`, `POST /api/skills/refresh` | Skill taxonomy (local table; refresh re-fetches from the site) |
-| `GET /api/jobs` | Query: search, status, salary, `min_ats`, date range, keyword filters |
-| `GET /api/jobs/export` | Full CSV (no pagination) |
-| `PUT/GET /api/resume` | Master resume profiles |
-| `GET /api/resume/ats` | Deterministic ATS score (0–100), `auto=1` = best-fitting profile |
-| `POST /api/resume/tailor` | LLM rewrite of the best-fitting profile for a job |
-| `GET /api/resume/export` | Tailored resume as docx/txt |
-| `POST /api/resume/build` | One-page Harvard CV (RenderCV) |
-| `GET /api/config`, `POST /api/config/reload` | Live config (redacted) + reload |
+| `POST /api/keywords/apply` | Apply + persist keyword rules; empty lists are a no-op, `clear_rules: true` is the explicit wipe |
+| `GET /api/scrape-scope` | The persisted auto-run scope |
+| `POST /api/scrape-scope` | Persist the auto-run scope |
+| `GET /api/skills` | Skill taxonomy (local table) |
+| `GET /api/skills/categories` | Category list |
+| `POST /api/skills/refresh` | Re-fetch the taxonomy from the site |
+| `GET /api/jobs` | Query: search, status, salary, `min_fit`, `min_ats`, date range, keyword filters, `hide_reposts`, `include_deleted` |
+| `GET /api/jobs/export` | Full CSV (no pagination, same filters as the table, BOM for Excel) |
+| `GET /api/resume` | Master resume (default profile) |
+| `PUT /api/resume` | Save a named profile |
+| `GET /api/resume/profiles` | Named profiles + which is default |
+| `GET /api/resume/ats` | Deterministic ATS score: `fit` (/60) + `hygiene` (/40), `auto=1` = best-fitting profile |
+| `POST /api/resume/tailor` | LLM rewrite of the best-fitting profile for a job, guarded for faithfulness and stored |
+| `GET /api/resume/export` | Tailored resume as docx/txt — served from the stored copy, so it matches what was scored |
+| `POST /api/resume/build` | One-page Harvard CV (RenderCV) as an SSE run: per-round progress, stoppable |
+| `GET /api/resume/built` | Built CVs on disk (pdf/docx) |
+| `GET /api/resume/built/{name}` | Download one built CV |
+| `GET /api/resume/yamlcv-status` | Whether RenderCV + a LaTeX engine are available |
+| `GET /api/config`, `POST /api/config/reload` | Live config (redacted) + reload (rebuilds the HTTP client too) |
 | `GET /health` | Real health: DB probe + site probe; 200 / 200-degraded / 503-degraded |
 
 ## A run, end to end

@@ -4,14 +4,20 @@
 set -e
 cd "$(dirname "$0")/.."
 
-ruff check .
-python -m pytest tests/ -q
+ruff_out=$(python -m ruff check .) || exit 1   # H5: from the venv, not from PATH
+printf '%s\n' "$ruff_out"
+
+py_out=$(python -m pytest tests/ -q) || exit 1
+printf '%s\n' "$py_out"
+py_tests=$(printf '%s' "$py_out" | grep -oE '[0-9]+ passed' | tail -1 | cut -d' ' -f1)
 
 # F15 (audit): the Python suite is green while the table lies, so the frontend
 # gets its own harness. jsdom is the only dependency; node --test is the runner.
 if command -v node >/dev/null; then
   if [ -d node_modules/jsdom ]; then
-    node --test tests/js/ui.test.mjs || exit 1
+    js_out=$(node --test tests/js/ui.test.mjs) || exit 1
+    printf '%s\n' "$js_out"
+    js_tests=$(printf '%s' "$js_out" | grep -oE 'pass [0-9]+' | tail -1 | cut -d' ' -f2)
   else
     echo "gate: FAIL - node_modules/jsdom missing (run npm install) — frontend tests skipped, not silently passed" >&2
     exit 1
@@ -38,7 +44,8 @@ for f in app/routers/*.py; do
   fi
 done
 
-# W1.6: README truthfulness (config keys documented; no stale counts)
+# W1.6 + H1: README truthfulness (config keys, screenshots on disk, and the
+# test counts the README states must be the counts this gate just ran)
 # W3.1: live drift check (exit 0 with warn when offline; exit 1 on markup drift)
 # W6.1: every frontend module must parse as an ES module
 if command -v node >/dev/null; then
@@ -53,6 +60,6 @@ else
 fi
 
 python tools/check_fixtures.py
-python tools/check_readme.py
+python tools/check_readme.py --tests "${py_tests:-0}" --js "${js_tests:-0}"
 
 echo "gate: PASS"

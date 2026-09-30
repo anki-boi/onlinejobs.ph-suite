@@ -135,21 +135,25 @@ or by hand: `python scripts/backup.py`. Restore = copy a snapshot back over
 
 ## Resume tailoring + ATS
 
-- **Master resumes** (`resumes/masters.json`) — multiple named track profiles
-  in one file: `clinical-data-automation` (default), `healthcare`, `tech-data`.
-  A fresh clone's `masters.json` is seeded from the checked-in
-  `resumes/master.json` starter template (itself derived from the real
-  Dropbox masters). Add/rename any via
-  `PUT /api/resume {"profile": name, "master": …}`.
+- **Master resumes** (`resumes/masters.json`) — one file holding any number of
+  named track profiles. A fresh clone seeds **one** profile, `master`, from the
+  checked-in `resumes/master.json` starter template; that is the default. Add or
+  rename tracks in the Resume panel (or `PUT /api/resume {"profile": name,
+  "master": …}`) — e.g. a `healthcare` and a `tech-data` track once you have
+  real content for them. `masters.json` is gitignored: your profiles are local.
 - **ATS score** — deterministic, not LLM (recruiter-side first passes are
   keyword + structure based, and a rule scorer can't hallucinate):
-  `GET /api/resume/ats?job_id=N[&auto=1]` → 0-100 = skills 40 + keywords 20 +
-  format 25 + completeness 15, with matched/missing skills and rule-based
-  suggestions. `auto=1` scores every profile and returns the best fit —
+  `GET /api/resume/ats?job_id=N[&auto=1]` → 0-100, reported as its two halves:
+  **fit** = skills 40 + keywords 20 (/60, the half that changes per job) and
+  **hygiene** = format 25 + completeness 15 (/40, a property of your resume, the
+  same for every job). With matched/missing skills and rule-based suggestions.
+  `auto=1` scores every profile and returns the best fit —
   the job drawer uses this, so the right track always gets your resume.
-- **ATS filter** — toolbar toggle “ATS ≥ 50” hides every job your best-fitting
-  profile scores below 50 on (`GET /api/jobs?min_ats=50`). Collapses the full
-  list down to the jobs actually worth your time.
+- **Fit filter** — the toolbar's Fit slider hides every job your best-fitting
+  profile scores below N on (`GET /api/jobs?min_fit=N`, fit out of 60). It filters
+  on `fit`, not the total: the hygiene half is constant, so a total cut is mostly
+  your own resume moving the line. `sort=ats` orders the table by fit.
+  (`min_ats=N` still filters on the 0-100 total if you want that.)
 - **Tailor** — `POST /api/resume/tailor {"job_id": N, "auto": 1}`: the LLM
   rewrites the best-fitting profile for that job — rewrite & reorder only,
   never invents facts, written in the owner's tone (short, no buzzwords);
@@ -184,7 +188,7 @@ or by hand: `python scripts/backup.py`. Restore = copy a snapshot back over
 | `GET /api/events` | Long-lived SSE alert stream: new-job batches, closures, salary changes, due follow-ups, structure changes, auto-run hidden-by-keywords |
 | `GET /api/schedule` / `POST /api/schedule` | Auto-run on/off + interval (1–24 h) + last run/status |
 | `GET /api/config` / `POST /api/config/reload` | Live config (secrets redacted) + reload without restart (W1.4) |
-| `GET /api/jobs`, `GET /api/jobs/export` | Query (search, status, salary, `min_ats`, date range) + full CSV |
+| `GET /api/jobs`, `GET /api/jobs/export` | Query (search, status, salary, `min_fit`, `min_ats`, date range) + full CSV |
 | resume endpoints | `PUT/GET /api/resume`, `GET /api/resume/ats`, `POST /api/resume/tailor`, `GET /api/resume/export`, `POST /api/resume/build` — see the Resume section above |
 | `GET /health` | Real health probe (see the Health check section below) |
 
@@ -250,7 +254,7 @@ of INFO+ messages streams to stderr when running interactively.
 | `scripts/backup.py` | `VACUUM INTO` backup + retention pruning (run on a schedule or by hand) |
 | `scripts/make_autostart.bat` / `disable_autostart.bat` | Create/disable the Windows `JobHunter` logon task |
 | `tools/gate.sh` | One-command gate: ruff + full pytest + personal-path check + README truth check |
-| `tools/check_readme.py` | README truthfulness check (every config key documented; no stale counts) (W1.6) |
+| `tools/check_readme.py` | Docs truthfulness: config keys documented, screenshots on disk, test counts match what the gate just ran, endpoint table matches the app's real routes (W1.6, H1) |
 | `install.bat` / `run.bat` | Windows double-click setup + start (creates a venv) |
 | `static/index.html` / `static/app.js` / `static/style.css` | Dashboard UI |
 | `docs/` | Architecture, operations (backup/restore/autostart), scraping politeness & ToS |
@@ -262,9 +266,14 @@ of INFO+ messages streams to stderr when running interactively.
 pip install -r requirements-dev.txt   # pytest + ruff (test/lint gate)
 sh tools/gate.sh                     # the full gate run before every push
 python -m pytest tests/ -q           # full suite, no network
+npm run test:js                      # the frontend harness (jsdom) on its own
 python -m db.migrate --dry-run       # show which migration steps a DB would run
 JOBS_DB_PATH=/tmp/sandbox.db python main.py --port 8372   # run against a DB copy
 ```
+
+The gate counts what it runs, and the README has to agree with it: **431 Python tests**
+(`tests/`) and **30 jsdom UI tests** (`tests/js/ui.test.mjs`). Add a test, update the
+number — `tools/check_readme.py` fails the gate otherwise.
 
 `JOBS_DB_PATH` (absolute, or relative to the project dir) overrides `db_path` —
 used to test against a copy of a real database.

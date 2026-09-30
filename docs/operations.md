@@ -27,10 +27,10 @@ Fresh clone, first run: open the dashboard, fill in the resume
 README's configuration table.
 
 Edited files take effect after **Reload config** (the button in the config
-note banner, or `POST /api/config/reload`) — no restart needed (W1.4). One
-caveat: the HTTP client is built once, so scraper keys (`request_delay`,
-`max_retries`, `user_agent`, URLs) apply on the next app start; LLM and
-auto-run keys are live. LLM keys: `llm_base_url` / `llm_api_key` / `llm_model`
+note banner, or `POST /api/config/reload`) — no restart needed (W1.4). The HTTP
+client is rebuilt too, so scraper keys (`request_delay`, `max_retries`,
+`user_agent`, `oj_cookies`, URLs) apply to the next run — an in-flight run keeps
+the client it started with. LLM keys: `llm_base_url` / `llm_api_key` / `llm_model`
 point at any OpenAI-compatible endpoint (OpenAI, a local vLLM box, …).
 Without them, tailor and 1-page-CV return 503; everything else works.
 

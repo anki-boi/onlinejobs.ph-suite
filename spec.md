@@ -1,5 +1,11 @@
 # spec.md — Job Hunter (`onlinejobs.ph-suite`)
 
+> **Historical — do not read this as status.** It is the 2026-09-12 audit and
+> build plan, kept as the record of why the code is shaped the way it is. Its
+> numbers (192 tests, 694 jobs, "no CI") were true then and are wrong now; the
+> live counts are in `README.md`, and current behaviour lives in `docs/`.
+> Later waves (W-A…W-G, `plans/2026-09-29_bug-audit.md`) supersede parts of it.
+
 **Type:** audit + improvement spec + delegated build plan
 **Date:** 2026-09-12
 **Baseline commit:** `390870c` (2026-09-08)
