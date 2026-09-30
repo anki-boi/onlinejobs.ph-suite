@@ -63,50 +63,135 @@ def clean_company(name: str | None) -> str | None:
     return n
 
 
-def _salary_struct(salary: str | None) -> tuple:
-    """Structured salary fields for one salary text: (min, max, currency,
-    monthly_min_PHP, monthly_max_PHP). FX rate is LIVE (W4.1); no live rate
-    → monthly NULL, never approximated, never stale."""
-    from scraper.salary import normalize_to_php, parse_salary
-    mn, mx, cur = parse_salary(salary)
-    pmn, pmx = normalize_to_php(mn, mx, cur)
-    return (mn, mx, cur, pmn, pmx)
+SALARY_COLS = ("salary_min", "salary_max", "salary_currency",
+               "salary_monthly_min", "salary_monthly_max",
+               "salary_unit", "salary_hours", "salary_hours_basis",
+               "salary_rate_min", "salary_rate_max",
+               "salary_assumed_currency", "salary_piece_rate")
+# Columns derivable from the salary text alone. The rest need a live FX rate, and a
+# row whose rate is not live keeps what it had rather than being blanked.
+SALARY_COLS_NO_FX = ("salary_min", "salary_max", "salary_currency", "salary_unit",
+                     "salary_hours", "salary_hours_basis",
+                     "salary_assumed_currency", "salary_piece_rate")
 
 
-def renormalize(conn) -> dict:
-    """Recompute salary_monthly_* from LIVE rates (server start + daily).
+def _hours_basis(salary, hours_per_week, work_type, title) -> tuple[float | None, str]:
+    """Weekly hours a listing states. Its own HOURS PER WEEK field first (a range
+    reads its LOWER bound — understating a month is honest, inflating one is not),
+    then an `N hours/week` phrase, then what "full time" means (40 h/week, labelled
+    as an assumption). Part-time wins over full-time prose: inventing 40 h for a
+    part-timer nearly doubles their month (live: $6/hour → ₱60,223/mo)."""
+    import re
 
-    Fills rows that were NULL when no live rate was available, and fixes
-    rows whose stored rate is now outdated (a stale ₱ number is a wrong
-    number). If no live rate can be fetched, nothing is touched and {} is
-    returned. The rates + timestamp are recorded in app_settings.fx_metadata
-    so the UI can state exactly what it normalized at.
-    Returns the live rate table used (possibly {})."""
-    import json
-    from db.repos import settings as settings_repo
-    from scraper.salary import fetch_fx_to_php
-    curs = [r[0].upper() for r in conn.execute(
-        "SELECT DISTINCT salary_currency FROM jobs "
-        "WHERE salary_currency IS NOT NULL AND salary_currency != 'PHP'")]
-    fx = {c: v for c, v in fetch_fx_to_php(curs).items() if c != "PHP"}
+    from scraper.salary import hours_per_week_from
+    m = re.search(r"\d{1,3}", hours_per_week or "")
+    if m and 0 < int(m.group(0)) <= 80:
+        return float(m.group(0)), "stated"
+    return hours_per_week_from(" ".join(b for b in (salary, work_type, title) if b))
+
+
+def _columns(s, fx: dict | None, basis: str | None = None) -> dict:
+    from scraper.salary import monthly_php, rate_php
+    if s is None:
+        return {c: None for c in SALARY_COLS}
+    pmn, pmx = monthly_php(s, fx)
+    rmn, rmx = rate_php(s, fx)
+    return {
+        "salary_min": s.raw_min, "salary_max": s.raw_max, "salary_currency": s.currency,
+        "salary_monthly_min": pmn, "salary_monthly_max": pmx,
+        "salary_unit": s.unit, "salary_hours": s.hours,
+        # The caller's basis wins: it knows about work_type and the HOURS PER WEEK
+        # field, which the salary text alone does not ("$6/hour" + "Part Time").
+        "salary_hours_basis": basis or s.hours_basis,
+        "salary_rate_min": rmn, "salary_rate_max": rmx,
+        "salary_assumed_currency": int(s.assumed_currency),
+        "salary_piece_rate": int(s.per_unit),
+    }
+
+
+def salary_columns(salary, *, hours_per_week=None, work_type=None, title=None,
+                   fx: dict | None = None) -> dict:
+    """Every derived salary column for one salary text.
+
+    `salary_min/max` are the POSTED figures (per hour/day/month, as written).
+    `salary_monthly_min/max` are PHP per month — NULL when the listing does not
+    support a monthly figure (no stated hours, a day rate, a piece rate): a guessed
+    month is a wrong month. FX is live or absent, never stale.
+    """
+    from scraper.salary import parse_salary
+    hours, basis = _hours_basis(salary, hours_per_week, work_type, title)
+    return _columns(parse_salary(salary, hours), fx, basis)
+
+
+def recompute_salaries(conn, fx: dict | None = None) -> dict:
+    """Re-derive every salary column from the raw `salary` text — the one source of
+    truth for money in this DB. Called by migration v12 and by renormalize() on
+    live rates, which runs at boot and daily.
+
+    Rates are fetched once for the whole pass. A currency with no live rate keeps
+    its previous monthly columns (never an approximation, never a blanking) and the
+    next pass fills them. Returns {"rows", "monthly", "rates"}.
+    """
+    from scraper.salary import fetch_fx_to_php, parse_salary
+    have = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
+    # A legacy DB may predate the hours/work_type/title columns v12 reads for the
+    # hours basis; select only what exists rather than assuming the modern schema.
+    extra = [c for c in ("hours_per_week", "work_type", "title") if c in have]
+    rows = conn.execute(
+        f"SELECT id, salary{', ' + ', '.join(extra) if extra else ''} FROM jobs "
+        "WHERE salary IS NOT NULL AND salary != ''").fetchall()
+    parsed = []
+    curs: set[str] = set()
+    for r in rows:
+        keys = r.keys()
+        hours, _b = _hours_basis(r["salary"],
+                                 r["hours_per_week"] if "hours_per_week" in keys else None,
+                                 r["work_type"] if "work_type" in keys else None,
+                                 r["title"] if "title" in keys else None)
+        s = parse_salary(r["salary"], hours)
+        parsed.append((r["id"], s))
+        if s and s.currency != "PHP":
+            curs.add(s.currency)
+    if fx is None:
+        fx = fetch_fx_to_php(sorted(curs)) if curs else {}
+    fx = {str(k).upper(): v for k, v in fx.items()}
+    monthly = 0
+    for row_id, s in parsed:
+        cols = _columns(s, fx, _b)
+        no_rate = s is not None and s.currency != "PHP" and s.currency not in fx
+        cols_to_write = SALARY_COLS_NO_FX if no_rate else SALARY_COLS
+        monthly += cols["salary_monthly_min"] is not None
+        conn.execute(
+            f"UPDATE jobs SET {', '.join(f'{c} = ?' for c in cols_to_write)} WHERE id = ?",
+            [cols[c] for c in cols_to_write] + [row_id])
+    conn.commit()
+    _record_fx_metadata(conn, fx)
+    return {"rows": len(parsed), "monthly": monthly, "rates": fx}
+
+
+def _record_fx_metadata(conn, fx: dict) -> None:
+    """Rates + timestamp stored together, so the UI can state what it normalized at."""
     if not fx:
-        return {}
-    n = 0
-    for cur, rate in fx.items():
-        r = conn.execute(
-            "UPDATE jobs SET salary_monthly_min = ROUND(salary_min * ?, 2), "
-            "salary_monthly_max = ROUND(salary_max * ?, 2) "
-            "WHERE salary_currency = ? AND salary_min IS NOT NULL",
-            (rate, rate, cur))
-        n += r.rowcount
+        return
+    import json
+    import time as _time
+
+    from db.repos import settings as settings_repo
     raw = settings_repo.get(conn, "fx_metadata", "")
     meta = json.loads(raw) if raw else {}
     meta.update({k.lower(): v for k, v in fx.items()})
-    import time as _time
     meta["at"] = _time.strftime("%Y-%m-%d %H:%M:%S")
     settings_repo.set(conn, "fx_metadata", json.dumps(meta))
-    conn.commit()
-    return fx
+
+
+def renormalize(conn) -> dict:
+    """Recompute every salary column from LIVE rates (server start + daily).
+
+    Fills rows that were NULL because no live rate was available, and fixes rows
+    whose stored figure is now outdated (a stale ₱ number is a wrong number).
+    Returns the live rate table used (possibly {}).
+    """
+    return recompute_salaries(conn)["rates"]
 
 
 def _find_repost_origin(conn, row_id: int, title: str, employer_id: int | None = None,
@@ -435,20 +520,18 @@ def upsert_stub(
     skills_str = ", ".join(skills) if skills else None
     company = clean_company(company)
     date_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    if salary is not None:
-        s_min, s_max, s_cur, s_pmin, s_pmax = _salary_struct(salary)
-    else:
-        s_min = s_max = s_cur = s_pmin = s_pmax = None
+    sal = (salary_columns(salary, hours_per_week=hours, work_type=work_type, title=title)
+           if salary is not None else {c: None for c in SALARY_COLS})
 
     # Check by job_id first, then job_url
     existing = None
     if job_id:
         existing = conn.execute(
-            "SELECT id FROM jobs WHERE job_id = ?", (job_id,)
+            "SELECT id, salary FROM jobs WHERE job_id = ?", (job_id,)
         ).fetchone()
     if not existing:
         existing = conn.execute(
-            "SELECT id FROM jobs WHERE job_url = ?", (job_url,)
+            "SELECT id, salary FROM jobs WHERE job_url = ?", (job_url,)
         ).fetchone()
 
     if existing:
@@ -475,10 +558,9 @@ def upsert_stub(
             # or when the salary text genuinely changed ("$800/mo" → "TBD"
             # invalidates the captured numbers). A parse failure on the
             # same text must not clobber previously captured figures.
-            if s_pmin is not None or salary != (existing["salary"] if existing else None):
-                updates += ["salary_min = ?", "salary_max = ?", "salary_currency = ?",
-                            "salary_monthly_min = ?", "salary_monthly_max = ?"]
-                vals += [s_min, s_max, s_cur, s_pmin, s_pmax]
+            if sal["salary_min"] is not None or salary != existing["salary"]:
+                updates += [f"{c} = ?" for c in SALARY_COLS]
+                vals += [sal[c] for c in SALARY_COLS]
         if skills_str:
             updates.append("skills = ?")
             vals.append(skills_str)
@@ -499,17 +581,20 @@ def upsert_stub(
         """INSERT INTO jobs
            (job_id, job_url, title, work_type, company, posted_date,
             salary, location, hours_per_week, skills, search_keyword,
-            search_category, date_found, status,
+            search_category, date_found, status, norm_title,
             salary_min, salary_max, salary_currency,
-            salary_monthly_min, salary_monthly_max, norm_title)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'New',
-                   ?, ?, ?, ?, ?, ?)""",
+            salary_monthly_min, salary_monthly_max,
+            salary_unit, salary_hours, salary_hours_basis,
+            salary_rate_min, salary_rate_max,
+            salary_assumed_currency, salary_piece_rate)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'New', ?,
+                   ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             job_id, job_url, title, work_type, company, posted_date,
             salary, location, hours, skills_str, search_keyword,
             search_category, date_now,
-            s_min, s_max, s_cur, s_pmin, s_pmax,
             norm_title(title) if title else None,
+            *[sal[c] for c in SALARY_COLS],
         ),
     )
     conn.execute("UPDATE jobs SET norm_company = ? WHERE id = last_insert_rowid()",
@@ -572,17 +657,15 @@ def enrich_job(
     # Structured salary (raw min/max + currency + PHP-normalized monthly)
     # follows the salary text
     if salary is not None:
-        s_min, s_max, s_cur, s_pmin, s_pmax = _salary_struct(salary)
+        cols = salary_columns(salary, hours_per_week=hours_per_week, work_type=work_type,
+                              title=title)
         old = conn.execute("SELECT salary FROM jobs WHERE id = ?", (row_id,)).fetchone()
         old_text = old["salary"] if old is not None else None
         # Same clobber guard as upsert_stub: a parse failure on unchanged
         # text must not erase previously captured figures
-        if s_pmin is not None or salary != old_text:
-            fields["salary_min"] = s_min
-            fields["salary_max"] = s_max
-            fields["salary_currency"] = s_cur
-            fields["salary_monthly_min"] = s_pmin
-            fields["salary_monthly_max"] = s_pmax
+        if cols["salary_min"] is not None or salary != old_text:
+            for c in SALARY_COLS:
+                fields[c] = cols[c]
 
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     vals = list(fields.values()) + [row_id]

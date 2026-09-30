@@ -23,7 +23,7 @@ FX_METADATA_KEY = "fx_metadata"
 def step(conn) -> None:
     """v5: currency-aware salary (PHP-normalized monthly + FX metadata),
     norm_title/deleted_at columns; backfills salary text, records the rate used."""
-    from scraper.salary import fetch_fx_to_php, normalize_to_php, parse_salary
+    from scraper.salary import fetch_fx_to_php, monthly_php, parse_salary
 
     existing = {r[1] for r in conn.execute("PRAGMA table_info(jobs)")}
     for col, col_type in (
@@ -47,19 +47,21 @@ def step(conn) -> None:
         parsed = []
         curs = set()
         for r in rows:
-            mn, mx, cur = parse_salary(r["salary"])
-            parsed.append((r, mn, mx, cur))
-            if cur and cur != "PHP":
-                curs.add(cur)
+            s = parse_salary(r["salary"])
+            parsed.append((r, s))
+            if s and s.currency != "PHP":
+                curs.add(s.currency)
         fx = fetch_fx_to_php(sorted(curs)) if curs else {}
         n = 0
-        for r, mn, mx, cur in parsed:
-            pmn, pmx = normalize_to_php(mn, mx, cur, fx)
+        for r, s in parsed:
+            if s is None:
+                continue
+            pmn, pmx = monthly_php(s, fx)
             if pmn is not None:
                 conn.execute(
                     "UPDATE jobs SET salary_currency = ?, salary_monthly_min = ?, "
                     "salary_monthly_max = ? WHERE id = ?",
-                    (cur, pmn, pmx, r["id"]),
+                    (s.currency, pmn, pmx, r["id"]),
                 )
                 n += 1
         if n and fx:  # metadata records live rates — PHP-only rows need none

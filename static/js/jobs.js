@@ -89,19 +89,37 @@ function jobRowHtml(j) {
   const skillsArr = j.skills ? (Array.isArray(j.skills) ? j.skills : String(j.skills).split(',')) : [];
   const skillsHtml = skillsArr.slice(0,3).map(s=>`<span class="skill-tag">${esc(String(s).trim())}</span>`).join('');
   const repostBadge = j.repost_of ? '<span class="repost-badge" title="Same title posted again by the same employer — see the original">↻ repost</span>' : '';
-  // Salary chip = the PHP-normalized monthly value (W4.1). NULL = no live FX
-  // rate was available → no chip: outdated money is worse than no money.
-  // Tooltip shows the exact live rate + when it was checked, so
-  // "US$800/mo = ₱50,103" is verifiable.
-  const cur = j.salary_currency || ((j.salary||'').includes('$') ? 'USD' : 'PHP');
+  // Salary chip says what the listing supports. A monthly figure only when the
+  // listing supports one (stated hours, or a stated per-month amount); otherwise
+  // the posted rate converted to ₱ per hour/day/item; otherwise a plain "no monthly
+  // figure" and the reason. An invented month is a wrong month — live damage was
+  // $6/hour part-time showing as ₱60,223/mo. `≈` marks a currency guessed from
+  // magnitude alone ("42000"), which the user is owed the chance to disagree with.
+  const cur = j.salary_currency || 'PHP';
   const fxMeta = state.fx || {};
   const fxRate = fxMeta[cur.toLowerCase()];
   const fxTip = (cur !== 'PHP' && fxRate)
     ? ` normalized to ₱ at 1 ${cur} = ₱${fxRate}${fxMeta.at ? ` (rate checked ${fxMeta.at})` : ''}`
     : '';
-  const salChip = (j.salary_monthly_min != null && j.salary_monthly_max != null)
-    ? `<div class="salary-chip" title="PHP-normalized monthly${fxTip}">₱${j.salary_monthly_min===j.salary_monthly_max ? j.salary_monthly_min.toLocaleString() : j.salary_monthly_min.toLocaleString()+'–'+j.salary_monthly_max.toLocaleString()}/mo</div>`
-    : '';
+  const guess = j.salary_assumed_currency ? '≈' : '';
+  const UNIT_SUFFIX = { hour: '/hr', day: '/day', month: '/mo', year: '/yr', piece: ' each' };
+  const peso = (lo, hi, suffix) =>
+    `${guess}₱${lo === hi ? lo.toLocaleString() : lo.toLocaleString() + '–' + hi.toLocaleString()}${suffix}`;
+  const basisTip = j.salary_hours_basis === 'stated'
+    ? ` at ${j.salary_hours} h/week (stated)`
+    : j.salary_hours_basis === 'full-time'
+      ? ` at ${j.salary_hours} h/week (full time assumed)` : '';
+  const noMonth = j.salary_min == null ? 'the listing states no money'
+    : j.salary_piece_rate ? 'paid per item — no monthly figure can be claimed'
+    : (cur === 'PHP' || fxRate) ? 'no weekly hours stated, so no monthly figure'
+      : `no live ${cur}→₱ rate, so no monthly figure`;
+  let salChip = '';
+  if (j.salary_monthly_min != null && j.salary_monthly_max != null)
+    salChip = `<div class="salary-chip" title="PHP-normalized monthly${basisTip}${fxTip}">${peso(j.salary_monthly_min, j.salary_monthly_max, '/mo')}</div>`;
+  else if (j.salary_rate_min != null && j.salary_rate_max != null)
+    salChip = `<div class="salary-chip salary-rate" title="Posted rate, PHP-normalized${fxTip} · ${noMonth}">${peso(j.salary_rate_min, j.salary_rate_max, j.salary_piece_rate ? ' each' : (UNIT_SUFFIX[j.salary_unit] || ''))}</div>`;
+  else if (j.salary)
+    salChip = `<div class="salary-none" title="${noMonth}">no monthly figure</div>`;
   // Two kinds of hidden: yours (solid) vs keyword auto-hide (dashed, remembers what it was)
   const badge = j.status === 'Hidden'
     ? (j.filter_hidden
@@ -375,4 +393,4 @@ function openColFilter(col, th) {
   filterPop.querySelector('.fp-text')?.focus();
 }
 
-export { buildJobsParams, loadJobs, renderJobs, renderPager, insertStubRow, applyVisibleFilter, exportCSV, toggleSort, updateSortIndicators, updateFunnelIndicators, closeColFilter, openColFilter, renderResultCount, colFilterOpen };
+export { buildJobsParams, jobRowHtml, loadJobs, renderJobs, renderPager, insertStubRow, applyVisibleFilter, exportCSV, toggleSort, updateSortIndicators, updateFunnelIndicators, closeColFilter, openColFilter, renderResultCount, colFilterOpen };

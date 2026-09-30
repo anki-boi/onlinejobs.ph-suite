@@ -112,6 +112,19 @@ parent + category path), `app_settings`
 status). `resumes/masters.json` holds resume profiles (gitignored);
 backups are `VACUUM INTO` snapshots in `backups/` (see operations.md).
 
+### Money
+
+`salary` is the poster's own words and is never rewritten. Everything derived from
+it says how it was read: `salary_min/max` are the posted figures, `salary_currency`
+the currency the text states (or `salary_assumed_currency=1` when it had to be
+guessed from magnitude), `salary_unit` + `salary_hours` + `salary_hours_basis`
+(`stated` / `full-time` / `part-time` / `unstated`) how a month would be built, and
+`salary_monthly_min/max` the PHP/month figure — NULL whenever the listing does not
+support a month (no stated hours, a piece rate, or no live FX rate for that
+currency). `salary_rate_min/max` carry the PHP per hour / per day / per item, which
+stays honest when a month is not. Migration v12 re-derives all of it from the raw
+text; `renormalize()` does the same daily with live rates.
+
 ## Concurrency model
 
 - **Event loop** (main thread): all HTTP/SSE. Long work is delegated.

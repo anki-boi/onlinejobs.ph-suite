@@ -139,6 +139,7 @@ snapshot back over the database.
 | One generic résumé sent to everything | One-click tailoring per listing, facts-only, exporting ATS-friendly docx |
 | A two-page CV uploaded into a one-page ATS rule | A builder that iterates until it is exactly one page |
 | Mixed currencies compared mentally | Normalized monthly chips with the rate and its timestamp recorded |
+| A pay figure the listing never claimed | `₱/mo` only when the listing supports one; otherwise `₱/hr`, `₱/day` or `₱ each`, and a currency guessed from magnitude is marked `≈` |
 | Finding out a job closed after applying | Scheduled re-checks; closures marked and alerted |
 | Re-screening reposted jobs | `↻ repost` detection with a hide toggle |
 | A spreadsheet tracker that goes stale | Auto-run + desktop alerts on new jobs, closures, salary changes, due follow-ups |
@@ -150,7 +151,7 @@ snapshot back over the database.
 
 ## Engineering decisions worth pointing at
 
-- **431 Python tests + 30 jsdom UI tests, no network.** The suite covers DB, parsers, pipeline, API, salary maths,
+- **525 Python tests + 34 jsdom UI tests, no network.** The suite covers DB, parsers, pipeline, API, salary maths,
   résumé rendering and YAML CV. `tools/gate.sh` runs ruff + the full suite + a
   personal-path scan + **a README-truthfulness check** (`tools/check_readme.py` verifies
   every config key is documented and no counts are stale).

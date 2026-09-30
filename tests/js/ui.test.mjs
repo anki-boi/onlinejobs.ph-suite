@@ -434,3 +434,47 @@ test('B12 — the CV build reports each round instead of a silent spinner', asyn
   assert.match(status.textContent, /Built in 1 round/, 'and the result lands');
   assert.equal(btn.disabled, false, 'the button comes back');
 });
+
+/* ── X-A: the salary chip may only claim what the listing supports ───────── */
+const SAL = (over) => M.jobs.jobRowHtml({
+  id: 900, title: 'VA', company: 'C', status: 'New', scrape_status: 'Open',
+  posted_date: '2026-09-02 08:00:00', skills: 'Excel', repost_of: null,
+  ats_fit: null, ats_total: null, ats_profile: null, ...over,
+});
+
+test('X-A — an hourly rate with no stated hours shows a rate, never a month', () => {
+  const html = SAL({ salary: '$16/hour', salary_min: 16, salary_max: 16,
+    salary_currency: 'USD', salary_unit: 'hour', salary_hours: null,
+    salary_hours_basis: 'unstated', salary_rate_min: 928, salary_rate_max: 928,
+    salary_monthly_min: null, salary_monthly_max: null,
+    salary_assumed_currency: 0, salary_piece_rate: 0 });
+  assert.match(html, /₱928\/hr/, 'the honest per-hour figure');
+  assert.doesNotMatch(html, /\/mo/, 'no invented month');
+});
+
+test('X-A — a piece rate is shown per item, not per month', () => {
+  const html = SAL({ salary: '$50-$150 per video', salary_min: 50, salary_max: 150,
+    salary_currency: 'USD', salary_unit: 'month', salary_hours: 40,
+    salary_hours_basis: 'full-time', salary_rate_min: 2900, salary_rate_max: 8700,
+    salary_monthly_min: null, salary_monthly_max: null,
+    salary_assumed_currency: 0, salary_piece_rate: 1 });
+  assert.match(html, /₱2,900–8,700 each/, 'per video, in pesos');
+  assert.doesNotMatch(html, /\/mo/, 'no month for pay-per-item');
+});
+
+test('X-A — a currency guessed from magnitude is marked as a guess', () => {
+  const html = SAL({ salary: '42000', salary_min: 42000, salary_max: 42000,
+    salary_currency: 'PHP', salary_unit: 'month', salary_hours: null,
+    salary_hours_basis: 'unstated', salary_rate_min: null, salary_rate_max: null,
+    salary_monthly_min: 42000, salary_monthly_max: 42000,
+    salary_assumed_currency: 1, salary_piece_rate: 0 });
+  assert.match(html, /≈₱42,000\/mo/, 'the ≈ says "we guessed the currency"');
+});
+
+test('X-A — a listing that states no money says so instead of showing nothing', () => {
+  const html = SAL({ salary: 'Need to be discussed', salary_min: null, salary_max: null,
+    salary_currency: null, salary_unit: null, salary_rate_min: null, salary_rate_max: null,
+    salary_monthly_min: null, salary_monthly_max: null,
+    salary_assumed_currency: 0, salary_piece_rate: 0 });
+  assert.match(html, /no monthly figure/, 'an explicit absence beats a blank cell');
+});

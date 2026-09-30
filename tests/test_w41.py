@@ -195,12 +195,13 @@ def test_v5_no_parseable_rows_no_fx_metadata(tmp_path, monkeypatch):
 
 
 def test_v5_no_live_rate_leaves_nulls(tmp_path):
-    """Offline (autouse stub) — no live rate means no normalization: rows stay
-    NULL, no fx_metadata written. Outdated money is worse than no money."""
+    """Offline (autouse stub) — no live rate means no normalization: the monthly
+    PHP columns stay NULL and no fx_metadata is written. Outdated money is worse
+    than no money. The currency itself needs no rate, so it IS recorded."""
     conn = _make_db(tmp_path, 4, legacy=True)
     dbmigrate.run(conn, dbconn.SCHEMA_VERSION)
     u1 = _row(conn, "u1")
-    assert u1["salary_currency"] is None
+    assert u1["salary_currency"] == "USD"
     assert u1["salary_monthly_min"] is None
     assert conn.execute(
         "SELECT COUNT(*) FROM app_settings WHERE key = 'fx_metadata'"
@@ -326,16 +327,20 @@ def test_normalize_to_php_non_numeric_rate(tmp_path, monkeypatch):
 
 # (salary text as it appears in jobs.db, expected salary_monthly_min, _max) at
 # fx usd=58.0. 'discussed'/'TBD' rows have no salary → NULL, never a guess.
+# Hand-computed goldens from real listing text. Two of them used to be
+# "$5.00/hour" → ₱46,400/mo and "$16/hour" → ₱148,480/mo: an invented 160-hour
+# month for a listing that states no hours. Those are NULL now — the parser may
+# not claim a month the listing does not support.
 GOLDEN_15 = [
     ("US$800/mo", 46400.0, 46400.0),
     ("₱60,000/mo", 60000.0, 60000.0),
     ("TBD", None, None),
-    ("$5.00/hour", 46400.0, 46400.0),
+    ("$5.00/hour", None, None),
     ("$450 usd per month", 26100.0, 26100.0),
     ("Need to be discussed", None, None),
     ("$425", 24650.0, 24650.0),
     ("$1200 USD a Month", 69600.0, 69600.0),
-    ("$16/hour", 148480.0, 148480.0),
+    ("$16/hour", None, None),
     ("1000 USD", 58000.0, 58000.0),
     ("30000 PHP Peso", 30000.0, 30000.0),
     ("47,000-170,000", 47000.0, 170000.0),
@@ -363,30 +368,31 @@ def test_golden_15_real_salary_strings(tmp_path, monkeypatch):
         assert row["salary_monthly_max"] == pmax, text
 
     # spec acceptance: mixed currencies sort by PHP value, NULLs last in both
-    # directions ($700-$1k and $16/hr are 58000 — id tie-break keeps it stable)
+    # directions ($700-$1k is 58000 — id tie-break keeps it stable). The two
+    # hours-less hourly listings sort with the "TBD" rows: no month, no rank.
     rows, _ = job_repo.get_jobs(conn, sort="salary", order="desc")
     assert [r["job_url"] for r in rows] == [
         "https://x/g/12",  # 170000
-        "https://x/g/9",   # 148480
         "https://x/g/15",  # 98600
         "https://x/g/8",   # 69600
         "https://x/g/2",   # 60000
         "https://x/g/10",  # 58000 (id 10 < 13)
         "https://x/g/13",  # 58000
         "https://x/g/1",   # 46400
-        "https://x/g/4",   # 46400
         "https://x/g/14",  # 40000
         "https://x/g/11",  # 30000
         "https://x/g/5",   # 26100
         "https://x/g/7",   # 24650
         "https://x/g/3",   # TBD
+        "https://x/g/4",   # $5.00/hour — no stated hours
         "https://x/g/6",   # discussed
+        "https://x/g/9",   # $16/hour — no stated hours
     ]
     rows, _ = job_repo.get_jobs(conn, sort="salary", order="asc")
     urls = [r["job_url"] for r in rows]
-    assert urls[-2:] == ["https://x/g/3", "https://x/g/6"]  # NULLs still last
-    assert urls[:-2] == ["https://x/g/7", "https://x/g/5", "https://x/g/11",
-                         "https://x/g/14", "https://x/g/1", "https://x/g/4",
-                         "https://x/g/10", "https://x/g/13", "https://x/g/2",
-                         "https://x/g/8", "https://x/g/15", "https://x/g/9",
-                         "https://x/g/12"]
+    assert urls[-4:] == ["https://x/g/3", "https://x/g/4", "https://x/g/6",
+                         "https://x/g/9"]  # NULLs still last
+    assert urls[:-4] == ["https://x/g/7", "https://x/g/5", "https://x/g/11",
+                         "https://x/g/14", "https://x/g/1", "https://x/g/10",
+                         "https://x/g/13", "https://x/g/2", "https://x/g/8",
+                         "https://x/g/15", "https://x/g/12"]

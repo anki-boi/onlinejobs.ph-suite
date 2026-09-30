@@ -19,7 +19,7 @@ import db.migrate as dbmigrate  # versioned migration registry (W2.7)
 # Bump when the migration in db/migrate.py changes. A DB file at a lower
 # version runs each unapplied step exactly once, on the next init_db(); a
 # fresh file runs all steps as no-ops and lands at this version.
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -57,6 +57,13 @@ TABLES = """
             salary_currency TEXT,
             salary_monthly_min REAL,
             salary_monthly_max REAL,
+            salary_unit     TEXT,
+            salary_hours    REAL,
+            salary_hours_basis TEXT,
+            salary_rate_min REAL,
+            salary_rate_max REAL,
+            salary_assumed_currency INTEGER,
+            salary_piece_rate INTEGER,
             norm_title      TEXT,
             norm_company    TEXT,
             deleted_at      TEXT,

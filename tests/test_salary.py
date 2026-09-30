@@ -1,98 +1,106 @@
 """
-tests/test_salary.py — parse_salary: free-text OJ.ph salary strings →
-(min, max, currency) in monthly terms. Pure function; every case is a
-format observed in the real jobs.db.
+tests/test_salary.py — the salary parser's own rules (the shared corpus lives in
+tests/test_salary_corpus.py).
+
+The policy under test: a monthly figure is claimed only when the listing gives a
+per-month/week/year amount, or an hourly rate plus stated weekly hours (or "full
+time", which means 40 h/week). There is no fallback for unstated hours — not 40,
+and not 20 for "Part Time", which states no number at all.
 """
 
-import sys
-from pathlib import Path
+from scraper.salary import (FULL_TIME_HOURS, hours_per_week_from, monthly_php,
+                            normalize_to_php, parse_salary, rate_php)
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from scraper.salary import parse_salary
-
-
-def test_php_range():
-    assert parse_salary("40000-50000php") == (40000.0, 50000.0, "PHP")
+RATES = {"USD": 62.738, "EUR": 61.2, "AUD": 42.1, "CAD": 45.9, "SGD": 48.4, "GBP": 58.4}
+FT = FULL_TIME_HOURS
 
 
-def test_php_range_with_currency_word():
-    assert parse_salary("Php40,000.00 - Php50,000.00") == (40000.0, 50000.0, "PHP")
+def monthly(text, hours=None):
+    p = parse_salary(text, hours)
+    return None if not p or not p.monthly else (p.min, p.max, p.currency)
 
 
-def test_usd_monthly_range():
-    assert parse_salary("$800-$1200/mo") == (800.0, 1200.0, "USD")
+def test_stated_monthly_and_weekly():
+    assert monthly("40000-50000php") == (40000.0, 50000.0, "PHP")
+    assert monthly("$800-$1200/mo") == (800.0, 1200.0, "USD")
+    assert monthly("$200/Week + 5% commission") == (866.0, 866.0, "USD")
+    assert monthly("Circa Annual Salary - US$6000") == (500.0, 500.0, "USD")
 
 
-def test_usd_monthly_to():
-    assert parse_salary("$6 to $15/hr") == (960.0, 2400.0, "USD")  # hourly × 160
+def test_hourly_needs_hours():
+    assert monthly("$5/hour") is None  # no hours stated → no month may be claimed
+    assert monthly("$5/hour", 20) == (400.0, 400.0, "USD")
+    assert monthly("$5/hour", FT) == (800.0, 800.0, "USD")
+    assert monthly("140 -175/ per hour", 20) == (11200.0, 14000.0, "PHP")
 
 
-def test_usd_hourly_word():
-    assert parse_salary("12 USD per hour") == (1920.0, 1920.0, "USD")  # × 160
+def test_day_rate_is_never_a_month():
+    p = parse_salary("Php 1000/day")
+    assert p.unit == "day" and not p.monthly
+    assert monthly("Php 1000/day", FT) is None  # days/week is unknown, even full time
+    assert rate_php(p, {}) == (1000, 1000)  # the posted rate is still true on its own
 
 
-def test_usd_weekly():
-    min_v, max_v, cur = parse_salary("$200/Week + 5% commission")
-    assert cur == "USD"
-    assert 850 <= min_v <= 880 and 850 <= max_v <= 880  # weekly × ~4.33
+def test_piece_rate_gets_no_month():
+    for text in ("$5 per entry", "$2/article", "$50-$150 per video", "$5 per account verified"):
+        p = parse_salary(text, FT)
+        assert p.per_unit and not p.monthly, text
+        assert monthly_php(p, RATES) == (None, None), text
+    assert parse_salary("Pay Per View") is None  # states no number at all
+    assert parse_salary("3/Hours").per_unit is False  # plural "Hours" is a time unit
+    assert parse_salary("$5+/- per hour").per_unit is False  # "+/-" is punctuation
 
 
-def test_plain_big_number_is_php_monthly():
-    assert parse_salary("42000") == (42000.0, 42000.0, "PHP")
+def test_currency_codes_beat_symbols_and_markers_are_honest():
+    assert parse_salary("$10 - $13 CAD per hour", FT).currency == "CAD"
+    assert parse_salary("SGD $1500 to $2,000 excluding bonuses").currency == "SGD"
+    assert parse_salary("1000€ /m").currency == "EUR"
+    assert parse_salary("400USD/mo").currency == "USD"
+    assert parse_salary("140 -175 per hour plus benefits").currency == "PHP"
+    assert parse_salary("42000").assumed_currency is True
+    assert parse_salary("Php 42000").assumed_currency is False
+    assert parse_salary("Php40,000.00 - Php50,000.00").assumed_currency is False
 
 
-def test_tiny_numbers_are_hourly_php():
-    # 11-17 with no unit and no currency: on OJ.ph that's an hourly rate
-    min_v, max_v, cur = parse_salary("11-17")
-    assert cur == "PHP"
-    assert 1700 <= min_v <= 1800 and 2700 <= max_v <= 2800
+def test_bare_numbers_are_read_by_magnitude():
+    assert monthly("6.00") is None and parse_salary("6.00").unit == "hour?"
+    assert monthly("1000") == (1000.0, 1000.0, "USD")  # 3-4 digits = monthly dollars
+    assert monthly("35000") == (35000.0, 35000.0, "PHP")  # 5+ digits = monthly pesos
+    assert monthly("€450-550") == (450.0, 550.0, "EUR")  # a stated marker always wins
 
 
-def test_annual_usd():
-    assert parse_salary("Circa Annual Salary - US$6000") == (500.0, 500.0, "USD")  # /12
+def test_comma_groups_are_read_as_the_poster_grouped_them():
+    assert parse_salary("7,5").min == 7.5
+    assert parse_salary("1,500").min == 1500.0
+    assert parse_salary("1,2345").min == 12345.0
+    p = parse_salary("35,0000 - 40,0000")  # a live mis-typed ₱350,000/month card
+    assert (p.min, p.max, p.currency) == (350000.0, 400000.0, "PHP")
 
 
-def test_per_day():
-    assert parse_salary("Php 1000/day") == (30000.0, 30000.0, "PHP")  # × 30
+def test_trailing_monthly_beats_leading_hourly():
+    assert monthly("PHP 240/hour, approx. PHP 40,000/mo") == (40000.0, 40000.0, "PHP")
 
 
-def test_single_value():
-    assert parse_salary("$400") == (400.0, 400.0, "USD")
+def test_hours_basis_precedence():
+    assert hours_per_week_from("20 hours per week") == (20.0, "stated")
+    assert hours_per_week_from("Hours per week: 30") == (30.0, "stated")
+    assert hours_per_week_from("Part Time") == (None, "part-time")
+    assert hours_per_week_from("Part Time — some full time availability needed") == (None, "part-time")
+    assert hours_per_week_from("Full Time") == (40.0, "full-time")
+    assert hours_per_week_from("no schedule given") == (None, "unstated")
 
 
-def test_no_numbers():
-    assert parse_salary("DOE") == (None, None, None)
-    assert parse_salary("") == (None, None, None)
-    assert parse_salary(None) == (None, None, None)
+def test_no_money_is_no_number():
+    for text in ("DOE", "", None, "Negotiable", "Commensurate with experience"):
+        assert parse_salary(text) is None, text
 
 
-def test_starting_at():
-    assert parse_salary("Starting at $1,200 USD/month") == (1200.0, 1200.0, "USD")
-
-
-def test_mojibake_dash():
-    # real data: en-dash eaten by the site's encoding → '$350$380/mo'
-    assert parse_salary("$350$380/mo (Total Package)") == (350.0, 380.0, "USD")
-
-
-def test_decimal_comma_hourly():
-    # real data: "$7,5/hour" is $7.50/hr (PH decimal comma), not $75
-    assert parse_salary("$7,5/hour") == (7.5 * 160, 7.5 * 160, "USD")
-
-
-def test_thousands_comma_range():
-    assert parse_salary("47,000-170,000") == (47000.0, 170000.0, "PHP")
-
-
-def test_parenthetical_aside_dropped():
-    assert parse_salary("$700/month ($175/week, paid weekly)") == (700.0, 700.0, "USD")
-    assert parse_salary("$1,055.00 per month (P60,300 php)") == (1055.0, 1055.0, "USD")
-
-
-def test_parenthetical_kept_when_only_number():
-    assert parse_salary("($2.00-$3.00) hourly") == (320.0, 480.0, "USD")
-
-
-def test_explicit_month_not_hourly_guess():
-    assert parse_salary("$100/month") == (100.0, 100.0, "USD")
+def test_fx_is_live_or_absent_never_guessed():
+    p = parse_salary("$880")
+    assert monthly_php(p, {}) == (None, None)  # no rate → no figure, never a guess
+    assert monthly_php(p, RATES) == (55209, 55209)
+    assert monthly_php(parse_salary("Php 30,000"), {}) == (30000, 30000)
+    cad = parse_salary("$10 - $13 CAD per hour", FT)
+    assert monthly_php(cad, {"USD": 62.738}) == (None, None)  # a CAD card needs a CAD rate
+    assert normalize_to_php(1000, 2000, "USD", RATES) == (62738, 125476)
+    assert normalize_to_php(None, None, "USD", RATES) == (None, None)

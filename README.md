@@ -271,8 +271,8 @@ python -m db.migrate --dry-run       # show which migration steps a DB would run
 JOBS_DB_PATH=/tmp/sandbox.db python main.py --port 8372   # run against a DB copy
 ```
 
-The gate counts what it runs, and the README has to agree with it: **431 Python tests**
-(`tests/`) and **30 jsdom UI tests** (`tests/js/ui.test.mjs`). Add a test, update the
+The gate counts what it runs, and the README has to agree with it: **525 Python tests**
+(`tests/`) and **34 jsdom UI tests** (`tests/js/ui.test.mjs`). Add a test, update the
 number — `tools/check_readme.py` fails the gate otherwise.
 
 `JOBS_DB_PATH` (absolute, or relative to the project dir) overrides `db_path` —

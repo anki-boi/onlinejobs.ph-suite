@@ -19,6 +19,9 @@ router = APIRouter(tags=['Jobs'])
 
 _EXPORT_COLS = ["id", "job_id", "title", "company", "description", "salary",
                 "salary_monthly_min", "salary_monthly_max", "salary_currency",
+                "salary_unit", "salary_hours", "salary_hours_basis",
+                "salary_rate_min", "salary_rate_max",
+                "salary_assumed_currency", "salary_piece_rate",
                 "location", "hours_per_week", "work_type", "posted_date",
                 "date_updated", "skills", "search_category", "status", "notes",
                 "follow_up", "repost_of", "filter_hidden", "pre_filter_status",

@@ -22,6 +22,7 @@ from db.migrations.v8_company_cleanup import step as _v8
 from db.migrations.v9_ats_fit import step as _v9
 from db.migrations.v10_tailored_resumes import step as _v10
 from db.migrations.v11_runs import step as _v11
+from db.migrations.v12_salary_truth import step as _v12
 
 log = logging.getLogger(__name__)
 
@@ -110,8 +111,9 @@ def _v3(conn) -> None:
 
 
 def _v4(conn) -> None:
-    """v4: structured salary columns + repost detection, backfilled from
-    legacy text."""
+    """v4: structured salary columns + repost detection, backfilled from legacy
+    text. The salary backfill itself moved to v12, which re-derives every salary
+    column from the raw text with the corrected parser (every DB runs v12)."""
     existing = _existing_columns(conn, "jobs")
     for col, col_type in {
         "repost_of":  "INTEGER",
@@ -121,7 +123,6 @@ def _v4(conn) -> None:
         if col not in existing:
             log.info("v4: adding column jobs.%s", col)
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {col} {col_type}")
-    _backfill_salary(conn)
     _backfill_reposts(conn)
 
 
@@ -138,6 +139,7 @@ MIGRATIONS: dict[int, callable] = {
     9: _v9,
     10: _v10,
     11: _v11,
+    12: _v12,
 }
 
 
@@ -165,24 +167,6 @@ def steps_to_apply(conn, target: int) -> list[int]:
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
-
-
-def _backfill_salary(conn) -> None:
-    """Parse salary strings already in the DB into salary_min/salary_max."""
-    from scraper.salary import parse_salary
-    rows = conn.execute(
-        "SELECT id, salary FROM jobs WHERE (salary IS NOT NULL AND salary != '') "
-        "AND salary_min IS NULL"
-    ).fetchall()
-    n = 0
-    for r in rows:
-        mn, mx, _cur = parse_salary(r["salary"])
-        if mn is not None:
-            conn.execute("UPDATE jobs SET salary_min=?, salary_max=? WHERE id=?", (mn, mx, r["id"]))
-            n += 1
-    if n:
-        log.info("Backfilled salary ranges for %d jobs", n)
-        conn.commit()
 
 
 def _backfill_reposts(conn) -> None:

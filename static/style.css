@@ -515,6 +515,13 @@ th.sorted-desc .th-label::after { content: '▼'; }
   margin-top: 3px; font-family: var(--mono); font-size: 0.72rem;
   color: var(--accent);
 }
+/* A rate the listing supports but no month: same chip, quieter, so a ₱/hr is not
+   mistaken for a ₱/mo when someone is scanning the column for pay. */
+.salary-chip.salary-rate { color: var(--text2); }
+.salary-none {
+  margin-top: 3px; font-size: 0.68rem; color: var(--text3);
+  border-bottom: 1px dotted var(--border); cursor: help;
+}
 
 /* P1: the fit half of the ATS score (skills + keywords, /60). Colour is the only
    signal — the number itself is meaningless without the tooltip's breakdown. */
