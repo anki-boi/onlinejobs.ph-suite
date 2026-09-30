@@ -78,6 +78,12 @@ Configuration lives in `config.json`, overlaid by the gitignored
    pays at least the goal is **kept** and marked `⚠ kept` instead of vanishing — only a
    monthly figure the listing itself supports can rescue it. Every hide records the word
    that caused it (`keyword_hit`), so an auto-hidden row tells you why in its tooltip.
+   **Listing flags** (read off the listing itself, no judgement added): `⚠ off-platform`
+   when the text asks for WhatsApp/Telegram/Calendly, an email address, an external form,
+   or leaves the shape of a stripped link behind (`----------`); `more than a 40-hour week`
+   in the hours column; `⚠ duplicate` on the older copy of a repost; `● fresh` for anything
+   posted in the last 24 h. A tool name only counts inside a sentence that is also asking
+   you to apply — "monitor Telegram accounts" is job content, not an application route.
 4. **Track** — click any row for the detail modal: change status
    (New → Interested → Applied → …), notes, follow-up date, and view history.
    The green/red/gray dot shows the site-side state (Open / Closed / unknown).
@@ -276,8 +282,8 @@ python -m db.migrate --dry-run       # show which migration steps a DB would run
 JOBS_DB_PATH=/tmp/sandbox.db python main.py --port 8372   # run against a DB copy
 ```
 
-The gate counts what it runs, and the README has to agree with it: **536 Python tests**
-(`tests/`) and **36 jsdom UI tests** (`tests/js/ui.test.mjs`). Add a test, update the
+The gate counts what it runs, and the README has to agree with it: **555 Python tests**
+(`tests/`) and **40 jsdom UI tests** (`tests/js/ui.test.mjs`). Add a test, update the
 number — `tools/check_readme.py` fails the gate otherwise.
 
 `JOBS_DB_PATH` (absolute, or relative to the project dir) overrides `db_path` —

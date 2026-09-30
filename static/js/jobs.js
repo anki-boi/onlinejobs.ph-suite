@@ -89,6 +89,12 @@ function jobRowHtml(j) {
   const skillsArr = j.skills ? (Array.isArray(j.skills) ? j.skills : String(j.skills).split(',')) : [];
   const skillsHtml = skillsArr.slice(0,3).map(s=>`<span class="skill-tag">${esc(String(s).trim())}</span>`).join('');
   const repostBadge = j.repost_of ? '<span class="repost-badge" title="Same title posted again by the same employer — see the original">↻ repost</span>' : '';
+  // X-D (F6): the older copy is where your status/history lives, so it says it is
+  // the stale one instead of looking current.
+  const staleBadge = j.superseded_by ? `<span class="flag-badge flag-stale" title="Superseded by job #${j.superseded_by} — the newer copy is the live one">⚠ duplicate</span>` : '';
+  // X-D (F1): the listing wants the application off-site (WhatsApp, a Google Form,
+  // an email address). Not a reason to skip it — a reason to know before you open it.
+  const offBadge = j.off_platform ? `<span class="flag-badge flag-off" title="${esc(j.off_platform)}">⚠ off-platform</span>` : '';
   // Salary chip says what the listing supports. A monthly figure only when the
   // listing supports one (stated hours, or a stated per-month amount); otherwise
   // the posted rate converted to ₱ per hour/day/item; otherwise a plain "no monthly
@@ -143,14 +149,22 @@ function jobRowHtml(j) {
   return `<tr data-id="${j.id}" data-repost="${j.repost_of||''}" data-title="${esc(j.title||'')}" tabindex="0" class="${j.status==='Hidden'?'hidden-row':''}">
     <td><span class="scrape-dot ${dot}" title="${dotTitle}"></span></td>
     <td>${badge}</td>
-    <td><div class="cell-title">${esc(j.title)||'<em class="text-muted">untitled</em>'} ${repostBadge}${keptBadge}</div>${skillsHtml?`<div class="mt-1">${skillsHtml}</div>`:''}</td>
+    <td><div class="cell-title">${esc(j.title)||'<em class="text-muted">untitled</em>'} ${repostBadge}${keptBadge}${staleBadge}${offBadge}</div>${skillsHtml?`<div class="mt-1">${skillsHtml}</div>`:''}</td>
     <td class="cell-mono">${esc(j.company||'')||'<span class="text-muted">—</span>'}</td>
-    <td class="cell-date">${fmtDate(j.posted_date)||fmtDate(j.date_found)}</td>
+    <td class="cell-date">${fmtDate(j.posted_date)||fmtDate(j.date_found)}${freshMark(j)}</td>
     <td><span class="work-type ${wtCls}">${wt}</span></td>
     <td class="cell-mono">${esc(j.salary||'')||'<span class="text-muted">—</span>'}${salChip}</td>
-    <td class="cell-mono">${esc(j.hours_per_week||'')||'<span class="text-muted">—</span>'}</td>
+    <td class="cell-mono">${esc(j.hours_per_week||'')||'<span class="text-muted">—</span>'}${j.over_40h?'<div class="flag-line">more than a 40-hour week</div>':''}</td>
     <td class="cell-mono">${fitHtml}</td>
   </tr>`;
+}
+
+// X-D (F5): under 24 h old — the window where a reply is actually possible.
+function freshMark(j) {
+  const d = j.posted_date || j.date_found;
+  if (!d) return '';
+  const t = Date.parse(d.replace(' ', 'T'));
+  return Number.isFinite(t) && (Date.now() - t) < 86400000 ? '<span class="flag-fresh" title="Posted within the last 24 hours">● fresh</span>' : '';
 }
 
 // W6.2: pager (Prev / Next) — page state lives in state.page

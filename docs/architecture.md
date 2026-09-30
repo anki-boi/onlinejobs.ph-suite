@@ -132,6 +132,14 @@ text; `renormalize()` does the same daily with live rates.
 goal (`settings.pay_goal_monthly`) and so stays visible. A hide that names no word is a hide
 you cannot argue with.
 
+### Listing flags
+
+Migration v14 derives three facts from text the DB already holds: `off_platform`
+(`scraper/offplatform.py` — an application ask, a messaging tool *inside* that ask, an
+external link, an address, or the `----------` OJ.ph leaves where it stripped a link),
+`over_40h` (the listing asks for more than a 40-hour week), and `superseded_by` (this row
+is the older copy of a repost — the one holding your status and history).
+
 ## Concurrency model
 
 - **Event loop** (main thread): all HTTP/SSE. Long work is delegated.

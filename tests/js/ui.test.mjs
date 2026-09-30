@@ -492,3 +492,28 @@ test('X-C — an auto-hidden row names the keyword that hid it', () => {
     keyword_hit: 'negative:crypto' });
   assert.match(html, /Auto-hidden by keyword rules \(negative:crypto\)/, 'the reason is in the tooltip');
 });
+
+/* ── X-D: the flags a listing states about itself ─────────────────────────── */
+test('X-D — an off-platform ask is marked before you open it', () => {
+  const html = SAL({ off_platform: 'ask:send your resume · tool:whatsapp', title: 'VA' });
+  assert.match(html, /⚠ off-platform/);
+  assert.match(html, /title="ask:send your resume · tool:whatsapp"/, 'the tooltip says what it wants');
+});
+
+test('X-D — the older copy of a repost says it is the stale one', () => {
+  const html = SAL({ title: 'Executive Assistant', superseded_by: 77 });
+  assert.match(html, /⚠ duplicate/);
+  assert.match(html, /Superseded by job #77/);
+});
+
+test('X-D — a 60-hour week is called out in the hours column', () => {
+  const html = SAL({ hours_per_week: '60 hours/week', over_40h: 1 });
+  assert.match(html, /more than a 40-hour week/);
+  assert.doesNotMatch(SAL({ hours_per_week: '40 hours/week', over_40h: 0 }), /40-hour week/);
+});
+
+test('X-D — a listing posted today is marked fresh', () => {
+  const today = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  assert.match(SAL({ posted_date: today }), /● fresh/);
+  assert.doesNotMatch(SAL({ posted_date: '2026-01-04 09:00:00' }), /● fresh/);
+});

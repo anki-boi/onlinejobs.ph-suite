@@ -520,6 +520,16 @@ th.sorted-desc .th-label::after { content: '▼'; }
 .salary-chip.salary-rate { color: var(--text2); }
 /* X-C (F2): a Remove-keyword job that clears the pay goal. Amber, not green — it
    matched something you asked to remove, and the badge is your call to override. */
+/* X-D: listing flags. Each one is a fact about the listing, not a judgement about
+   the job — so they are quiet grey/amber marks, never a red "bad job". */
+.flag-badge {
+  margin-left: 6px; font-size: 0.66rem; border-radius: 6px; padding: 1px 5px;
+  border: 1px solid var(--border); color: var(--text2); cursor: help;
+}
+.flag-off  { color: var(--red); border-color: var(--red); border-style: dashed; }
+.flag-stale { color: var(--text3); border-style: dashed; }
+.flag-fresh { margin-left: 5px; font-size: 0.66rem; color: var(--green); cursor: help; }
+.flag-line { font-size: 0.64rem; color: var(--accent2); }
 .kw-kept {
   margin-left: 6px; font-size: 0.66rem; color: var(--accent2);
   border: 1px dashed var(--accent2); border-radius: 6px; padding: 1px 5px;

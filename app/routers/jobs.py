@@ -24,7 +24,8 @@ _EXPORT_COLS = ["id", "job_id", "title", "company", "description", "salary",
                 "salary_assumed_currency", "salary_piece_rate",
                 "location", "hours_per_week", "work_type", "posted_date",
                 "date_updated", "skills", "search_category", "status", "notes",
-                "follow_up", "repost_of", "filter_hidden", "pre_filter_status",
+                "follow_up", "repost_of", "superseded_by", "filter_hidden", "pre_filter_status",
+                "off_platform", "over_40h", "keyword_hit",
                 "scrape_status", "ats_fit", "ats_total", "ats_profile"]
 
 

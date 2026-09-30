@@ -5,6 +5,8 @@ db/repos/jobs.py — All job CRUD and query operations.
 import sqlite3
 from datetime import datetime
 
+from scraper.offplatform import off_platform, over_40_hours
+
 STATUSES = [
     "New", "Interested", "Applied", "Interviewing",
     "Offer", "Hired", "Rejected", "Hidden",
@@ -203,7 +205,11 @@ def _find_repost_origin(conn, row_id: int, title: str, employer_id: int | None =
     for most of the DB, and reposts went largely undetected).
 
     Index-backed on (norm_title, employer_id) / (norm_company, norm_title); the
-    old version re-queried the title of every candidate row one at a time."""
+    old version re-queried the title of every candidate row one at a time.
+
+    "Repost" means posted *again*, so the origin has to be the earlier listing.
+    Ordering by row id alone marked an older job as a repost of a newer one
+    whenever the older one happened to be enriched second."""
     nt = norm_title(title)
     if not nt:
         return None
@@ -214,12 +220,21 @@ def _find_repost_origin(conn, row_id: int, title: str, employer_id: int | None =
         if not nc:
             return None
         cond, arg = "norm_company = ?", nc
-    row = conn.execute(
-        f"SELECT id FROM jobs WHERE norm_title = ? AND id != ? "
-        f"AND repost_of IS NULL AND {cond} ORDER BY id LIMIT 1",
+    me = conn.execute(
+        "SELECT id, COALESCE(posted_date, date_found) AS d FROM jobs WHERE id = ?",
+        (row_id,),
+    ).fetchone()
+    if me is None:
+        return None
+    cand = conn.execute(
+        f"SELECT id, COALESCE(posted_date, date_found) AS d FROM jobs "
+        f"WHERE norm_title = ? AND id != ? AND repost_of IS NULL AND {cond} "
+        f"ORDER BY d ASC, id ASC LIMIT 1",
         (nt, row_id, arg),
     ).fetchone()
-    return row["id"] if row else None
+    if cand is None or (cand["d"], cand["id"]) >= (me["d"], me["id"]):
+        return None  # nothing earlier than this listing — this one is the original
+    return cand["id"]
 
 
 # Columns the API may sort by (Excel-style header sorting).
@@ -547,6 +562,11 @@ def upsert_stub(
             if val is not None:
                 updates.append(f"{col} = ?")
                 vals.append(val)
+        if hours is not None:
+            # X-D (F4): the list view states the week; a 60-hour week is worth
+            # knowing before you open the job.
+            updates.append("over_40h = ?")
+            vals.append(int(over_40_hours(hours)))
         if title is not None and norm_title(title):
             updates.append("norm_title = ?")
             vals.append(norm_title(title))
@@ -586,15 +606,16 @@ def upsert_stub(
             salary_monthly_min, salary_monthly_max,
             salary_unit, salary_hours, salary_hours_basis,
             salary_rate_min, salary_rate_max,
-            salary_assumed_currency, salary_piece_rate)
+            salary_assumed_currency, salary_piece_rate, over_40h)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'New', ?,
-                   ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             job_id, job_url, title, work_type, company, posted_date,
             salary, location, hours, skills_str, search_keyword,
             search_category, date_now,
             norm_title(title) if title else None,
             *[sal[c] for c in SALARY_COLS],
+            int(over_40_hours(hours)),
         ),
     )
     conn.execute("UPDATE jobs SET norm_company = ? WHERE id = last_insert_rowid()",
@@ -656,6 +677,12 @@ def enrich_job(
 
     # Structured salary (raw min/max + currency + PHP-normalized monthly)
     # follows the salary text
+    # X-D (F1/F4): what the listing wants off-site, and whether the week is longer
+    # than full-time. Both come from the detail text, which only exists after enrich.
+    fields["off_platform"] = off_platform(description)
+    if hours_per_week is not None:
+        fields["over_40h"] = int(over_40_hours(hours_per_week))
+
     if salary is not None:
         cols = salary_columns(salary, hours_per_week=hours_per_week, work_type=work_type,
                               title=title)
@@ -679,6 +706,11 @@ def enrich_job(
         origin = _find_repost_origin(conn, row_id, row["title"],
                                      row["employer_id"], row["company"])
         conn.execute("UPDATE jobs SET repost_of=? WHERE id=?", (origin, row_id))
+        if origin:
+            # X-D (F6): the newer copy is the live one. The older row is where the
+            # user's status/history actually lives, so it says so instead of being
+            # silently hidden behind the repost toggle.
+            conn.execute("UPDATE jobs SET superseded_by=? WHERE id=?", (row_id, origin))
 
     conn.commit()
 

@@ -24,6 +24,7 @@ from db.migrations.v10_tailored_resumes import step as _v10
 from db.migrations.v11_runs import step as _v11
 from db.migrations.v12_salary_truth import step as _v12
 from db.migrations.v13_keyword_hit import step as _v13
+from db.migrations.v14_listing_flags import step as _v14
 
 log = logging.getLogger(__name__)
 
@@ -142,6 +143,7 @@ MIGRATIONS: dict[int, callable] = {
     11: _v11,
     12: _v12,
     13: _v13,
+    14: _v14,
 }
 
 

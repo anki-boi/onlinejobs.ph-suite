@@ -139,6 +139,9 @@ snapshot back over the database.
 | One generic résumé sent to everything | One-click tailoring per listing, facts-only, exporting ATS-friendly docx |
 | A two-page CV uploaded into a one-page ATS rule | A builder that iterates until it is exactly one page |
 | Mixed currencies compared mentally | Normalized monthly chips with the rate and its timestamp recorded |
+| An application that leaves the platform you are tracking | `⚠ off-platform` names the ask (WhatsApp / an email / a form / a stripped `----------` link) before you open the job |
+| A 60-hour week hidden behind "45" | the hours column says `more than a 40-hour week` |
+| The stale copy of a repost looking current | the older row is marked `⚠ duplicate` with the newer job id |
 | A good job lost silently to one keyword match | A Remove-keyword match that clears your **pay goal** is kept and marked `⚠ kept`; every hide records the word that caused it (`keyword_hit`) |
 | A pay figure the listing never claimed | `₱/mo` only when the listing supports one; otherwise `₱/hr`, `₱/day` or `₱ each`, and a currency guessed from magnitude is marked `≈` |
 | Finding out a job closed after applying | Scheduled re-checks; closures marked and alerted |
@@ -152,7 +155,7 @@ snapshot back over the database.
 
 ## Engineering decisions worth pointing at
 
-- **536 Python tests + 36 jsdom UI tests, no network.** The suite covers DB, parsers, pipeline, API, salary maths,
+- **555 Python tests + 40 jsdom UI tests, no network.** The suite covers DB, parsers, pipeline, API, salary maths,
   résumé rendering and YAML CV. `tools/gate.sh` runs ruff + the full suite + a
   personal-path scan + **a README-truthfulness check** (`tools/check_readme.py` verifies
   every config key is documented and no counts are stale).
