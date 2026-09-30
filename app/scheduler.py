@@ -18,6 +18,7 @@ import os
 import threading
 import time
 import uuid
+from datetime import date, timedelta
 
 import db.connection as dbconn
 from app import events
@@ -258,8 +259,16 @@ def run_once(client, conn, publish, cfg: dict | None = None) -> dict:
     scope_skills = json.loads(settings_repo.get(conn, "scrape_skills", "[]") or "[]")
     skill_ids = _resolve_skill_ids(conn, scope_skills)
 
+    # X-B (F3): an auto-run only needs what is new — anything older than this window
+    # was already harvested by an earlier run, and the board is newest-first, so
+    # harvest stops paging at the window instead of walking the whole archive into a
+    # Cloudflare 521. 0 turns the window off.
+    max_age = int(cfg.get("harvest_max_age_days", 0) or 0)
+    posted_since = (date.today() - timedelta(days=max_age)).isoformat() if max_age > 0 else None
+
     for event in harvest(client, existing_ids=existing, keyword=scope_kw,
-                         categories=scope_cats or None, skill_ids=skill_ids or None):
+                         categories=scope_cats or None, skill_ids=skill_ids or None,
+                         posted_since=posted_since):
         settings_repo.heartbeat_instance_lock(conn)  # W2.6: keep the lock fresh per batch
         if event.type == "harvest_result":
             n, new_items = pipeline_apply.apply_harvest(conn, event)

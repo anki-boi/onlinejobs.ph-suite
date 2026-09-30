@@ -151,7 +151,7 @@ snapshot back over the database.
 
 ## Engineering decisions worth pointing at
 
-- **525 Python tests + 34 jsdom UI tests, no network.** The suite covers DB, parsers, pipeline, API, salary maths,
+- **529 Python tests + 34 jsdom UI tests, no network.** The suite covers DB, parsers, pipeline, API, salary maths,
   résumé rendering and YAML CV. `tools/gate.sh` runs ruff + the full suite + a
   personal-path scan + **a README-truthfulness check** (`tools/check_readme.py` verifies
   every config key is documented and no counts are stale).

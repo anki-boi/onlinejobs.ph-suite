@@ -88,6 +88,7 @@ dashboard's auto-run panel.
 
 | Symptom | What it means / do |
 |---|---|
+| A run fetches far more pages than expected | An auto-run pages to `harvest_max_age_days` (7 by default) and stops when a page's oldest listing is older than that — the board is newest-first. Set `0` to page the whole archive, or raise it when catching up after a long gap. |
 | `GET /health` → 503 `site: unreachable` | The site is down or your network can't reach it; scraping won't work until it does. The app still serves stored data. |
 | `GET /health` → 200 `db: locked` | Another process holds the DB (a second app instance, or a stuck backup); it should clear within seconds. If it persists, stop other processes touching `jobs.db`. |
 | Two instances "stuck" | The pipeline lock row shows the holder PID (settings table / auto-run panel). A dead holder's PID is detected and the lock auto-recovers on next run (W2.6). |

@@ -49,6 +49,7 @@ Configuration lives in `config.json`, overlaid by the gitignored
 | `user_agent` | User-Agent sent with every outbound request |
 | `enrich_workers` | Parallel detail-page workers |
 | `enrich_interval_days` | "Check for updates" re-checks jobs older than this |
+| `harvest_max_age_days` | How far back an auto-run pages: the board is newest-first, so a search stops paging once its oldest listing is older than this (shipped as 7; `0` or omitted pages the whole archive) |
 | `backup_retention_days` | How many backups `scripts/backup.py` keeps (default 7 if omitted) |
 | `fx_to_php` (`.usd`) | FX rate used to normalize foreign-currency salaries to PHP (US$800/mo at 58 → ₱46,400). Override in `config.local.json` when the market moves; the rate actually used is recorded in the DB with a timestamp and shown with the normalized value |
 | `llm_base_url` / `llm_api_key` / `llm_model` | *(local overlay only)* any OpenAI-compatible endpoint for tailor + CV build |
@@ -271,7 +272,7 @@ python -m db.migrate --dry-run       # show which migration steps a DB would run
 JOBS_DB_PATH=/tmp/sandbox.db python main.py --port 8372   # run against a DB copy
 ```
 
-The gate counts what it runs, and the README has to agree with it: **525 Python tests**
+The gate counts what it runs, and the README has to agree with it: **529 Python tests**
 (`tests/`) and **34 jsdom UI tests** (`tests/js/ui.test.mjs`). Add a test, update the
 number — `tools/check_readme.py` fails the gate otherwise.
 

@@ -224,6 +224,21 @@ def harvest(
             # Stop conditions (B8: measured against THIS search's own total)
             if expected_total and seen_here >= expected_total:
                 break
+            # X-B (F3, the extension's `pastHorizon`): the board is sorted
+            # newest-first — verified against both live fixtures — so the OLDEST card
+            # on this page is the tail of the list. Once it is past the recency window,
+            # every later page is too, and paging them is Cloudflare exposure bought for
+            # listings the window would drop anyway. A page with no readable dates never
+            # ends the list: the rule that must not lose a listing does not get to
+            # decide when the list ends.
+            dates = [s.posted_date for s in stubs if s.posted_date]
+            if posted_since and dates and min(dates) < posted_since:
+                yield PipelineEvent(
+                    "log",
+                    f"  [{label}] recency window ends here (oldest {min(dates)[:10]}) "
+                    f"— not paging further",
+                )
+                break
             if page > 0 and not new_stubs:
                 break
             page += 1
