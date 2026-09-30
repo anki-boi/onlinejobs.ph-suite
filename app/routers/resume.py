@@ -8,6 +8,7 @@ import re
 from fastapi import HTTPException
 from fastapi.responses import Response
 from fastapi.routing import APIRouter
+from pydantic import BaseModel
 from app.schemas import ResumeUpdate, TailorRequest
 from app import server as srv
 from db.repos import jobs as job_repo
@@ -186,3 +187,47 @@ def built_file(name: str):
         raise HTTPException(404, "not found")
     from fastapi.responses import FileResponse
     return FileResponse(f, media_type="application/pdf")
+
+
+class FitListing(BaseModel):
+    """A listing the dashboard has never seen — the browser extension's view of a job
+    page. Only the text a score is actually built from."""
+    title: str = ""
+    description: str = ""
+    salary: str = ""
+    company: str = ""
+    work_type: str = ""
+    skills: list[str] = []
+
+
+class FitRequest(BaseModel):
+    jobs: list[FitListing] = []
+
+
+@router.post("/api/resume/fit")
+def resume_fit(body: FitRequest):
+    """X-E bridge: how well your resume fits listings you are looking at in the
+    browser, scored by the same deterministic scorer the table's Fit column uses.
+
+    Batched on purpose: one request per scanned page, not one per card. The profile
+    is per listing because the best profile for a video-editing job is not the best
+    profile for a nurse-practitioner job.
+    """
+    if len(body.jobs) > 50:
+        raise HTTPException(400, "fit accepts at most 50 listings per request")
+    masters = srv._masters()
+    out = []
+    for j in body.jobs:
+        best = srv.resume_schema.best_profile_for_job(masters, {
+            "title": j.title, "description": j.description, "salary": j.salary,
+            "company": j.company, "work_type": j.work_type,
+            "skills": ", ".join(j.skills or [])})
+        if best is None:
+            out.append({"profile": None, "fit": None, "total": None, "hygiene": None})
+            continue
+        name, sc = best
+        out.append({"profile": name, "fit": sc.get("fit", 0), "total": sc["total"],
+                    "hygiene": sc.get("hygiene", 0)})
+    if not out:
+        raise HTTPException(400, "send at least one listing")
+    return {"count": len(out), "results": out}

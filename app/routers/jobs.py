@@ -45,7 +45,7 @@ def _filtered_jobs(q: JobQuery):
         sort=q.sort, order=q.order, title=q.title, company=q.company,
         salary=q.salary, location=q.location, hours=q.hours,
         posted_from=q.posted_from, posted_to=q.posted_to,
-        has_salary=q.has_salary, min_ats=q.min_ats, min_fit=q.min_fit,
+        job_id=q.job_id, has_salary=q.has_salary, min_ats=q.min_ats, min_fit=q.min_fit,
         salary_min_monthly=q.salary_min_monthly,
         salary_max_monthly=q.salary_max_monthly,
         salary_currency=q.salary_currency, hide_reposts=q.hide_reposts,

@@ -2,6 +2,10 @@
 import { state, $, tbody, api, toast, esc, currentJob, detailPanel, detailOverlay, setCurrentJob } from './core.js';
 // B12: the CV build is an SSE stream now, so it reuses the pipeline's reader.
 import { streamSSE } from './run.js';
+// recheck refreshes the table — without these imports it threw a ReferenceError
+// and the refresh never happened (found by the X-E deep-link test).
+import { loadJobs } from './jobs.js';
+import { loadStats } from './stats.js';
 
 async function openDetail(id) {
   try {

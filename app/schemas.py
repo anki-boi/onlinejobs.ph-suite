@@ -54,6 +54,8 @@ class JobQuery(BaseModel):
 
     page: int = 1
     per_page: int = 50
+    # X-E: the site's job id, for a deep link from the browser extension.
+    job_id: int | None = None
     status: str | None = None
     search: str | None = None
     include_hidden: bool = False

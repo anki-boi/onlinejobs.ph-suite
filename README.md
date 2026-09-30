@@ -49,6 +49,7 @@ Configuration lives in `config.json`, overlaid by the gitignored
 | `user_agent` | User-Agent sent with every outbound request |
 | `enrich_workers` | Parallel detail-page workers |
 | `enrich_interval_days` | "Check for updates" re-checks jobs older than this |
+| `cors_origins` | Comma-separated browser origins allowed to read the API. Default is the site the extension bridge talks to (`https://onlinejobs.ph,https://www.onlinejobs.ph`); it is never `*` — a localhost dashboard holding your job history is not a public API |
 | `harvest_max_age_days` | How far back an auto-run pages: the board is newest-first, so a search stops paging once its oldest listing is older than this (shipped as 7; `0` or omitted pages the whole archive) |
 | `backup_retention_days` | How many backups `scripts/backup.py` keeps (default 7 if omitted) |
 | `fx_to_php` (`.usd`) | FX rate used to normalize foreign-currency salaries to PHP (US$800/mo at 58 → ₱46,400). Override in `config.local.json` when the market moves; the rate actually used is recorded in the DB with a timestamp and shown with the normalized value |
@@ -87,6 +88,7 @@ Configuration lives in `config.json`, overlaid by the gitignored
 4. **Track** — click any row for the detail modal: change status
    (New → Interested → Applied → …), notes, follow-up date, and view history.
    The green/red/gray dot shows the site-side state (Open / Closed / unknown).
+   **Extension bridge** — `POST /api/resume/fit` scores listings the `ojph-cleaner` extension is looking at in the browser (same deterministic scorer as the Fit column, batched per page), and `http://127.0.0.1:8372/?job=<site job id>` opens that saved job in the dashboard.
 5. **Check for updates** — re-fetches detail pages for jobs whose check is stale
    (or never checked). Deleted listings (HTTP 404/410, "no longer available" wording)
    are marked **Closed**. **Stop** aborts a run mid-flight; the console says how
@@ -282,8 +284,8 @@ python -m db.migrate --dry-run       # show which migration steps a DB would run
 JOBS_DB_PATH=/tmp/sandbox.db python main.py --port 8372   # run against a DB copy
 ```
 
-The gate counts what it runs, and the README has to agree with it: **555 Python tests**
-(`tests/`) and **40 jsdom UI tests** (`tests/js/ui.test.mjs`). Add a test, update the
+The gate counts what it runs, and the README has to agree with it: **561 Python tests**
+(`tests/`) and **43 jsdom UI tests** (`tests/js/ui.test.mjs`). Add a test, update the
 number — `tools/check_readme.py` fails the gate otherwise.
 
 `JOBS_DB_PATH` (absolute, or relative to the project dir) overrides `db_path` —

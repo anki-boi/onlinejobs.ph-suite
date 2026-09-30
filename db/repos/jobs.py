@@ -291,6 +291,7 @@ def get_jobs(
     posted_from: str | None = None,
     posted_to: str | None = None,
     has_salary: bool = False,
+    job_id: int | None = None,
     min_ats: int = 0,
     min_fit: int = 0,
     hide_reposts: bool = False,
@@ -377,6 +378,11 @@ def get_jobs(
         if posted_to:
             clauses.append(f"{eff} <= ?")
             params.append(posted_to)
+
+    if job_id is not None:
+        # X-E: the extension knows the site's job id, not this DB's row id.
+        clauses.append("job_id = ?")
+        params.append(job_id)
 
     if has_salary:
         # "Has a salary" = the field contains at least one digit. Excludes every

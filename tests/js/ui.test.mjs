@@ -91,6 +91,7 @@ before(async () => {
   globalThis.window = dom.window;
   globalThis.document = dom.window.document;
   globalThis.localStorage = dom.window.localStorage;
+  globalThis.location = dom.window.location;   // app.js reads ?job= for the extension deep link
   dom.window.Notification = Notif;      // app code checks `'Notification' in window`
   dom.window.EventSource = globalThis.EventSource;
 
@@ -101,7 +102,7 @@ before(async () => {
     resume: await import(fileUrl('static/js/resume.js')),
     run: await import(fileUrl('static/js/run.js')),
   };
-  await import(fileUrl('static/app.js'));
+  M.app = await import(fileUrl('static/app.js'));
   document.dispatchEvent(new window.Event('DOMContentLoaded'));
   await tick();
 });
@@ -516,4 +517,34 @@ test('X-D — a listing posted today is marked fresh', () => {
   const today = new Date().toISOString().slice(0, 19).replace('T', ' ');
   assert.match(SAL({ posted_date: today }), /● fresh/);
   assert.doesNotMatch(SAL({ posted_date: '2026-01-04 09:00:00' }), /● fresh/);
+});
+
+test('X-E — ?job=<site id> opens that saved job', async () => {
+  const prev = globalThis.location;
+  globalThis.location = { search: '?job=1' };
+  fetched.length = 0;
+  try {
+    await M.app.openDeepLinkJob();
+    assert.ok(fetched.some(u => u.includes('/api/jobs?job_id=1')), 'looked it up by its site job id');
+  } finally { globalThis.location = prev; }
+});
+
+test('X-E — a deep link to a job that is not saved says so instead of opening nothing', async () => {
+  globalThis.fetch = async () => ({ ok: true, status: 200,
+    json: async () => ({ items: [], total: 0 }), text: async () => '' });
+  const prev = globalThis.location;
+  globalThis.location = { search: '?job=999999' };
+  try { await M.app.openDeepLinkJob(); } finally { globalThis.location = prev; }
+  await tick();
+  assert.match(document.querySelector('.toast')?.textContent || '', /not in your saved jobs/);
+});
+
+test('X-E — re-checking a job refreshes the table (it used to throw instead)', async () => {
+  M.core.setCurrentJob({ id: 1, job_id: 7, title: 'x' });
+  fetched.length = 0;
+  await M.resume.detailRecheckClick();
+  await tick();
+  assert.ok(fetched.some(u => u.endsWith('/api/jobs') || u.includes('/api/jobs?')),
+    'the table reload actually ran — resume.js used to call loadJobs without importing it');
+  assert.doesNotMatch(document.querySelector('.toast')?.textContent || '', /is not defined/);
 });

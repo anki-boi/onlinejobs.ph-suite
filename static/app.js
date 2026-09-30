@@ -180,6 +180,17 @@ function init() {
   syncAutoRunUI();
 }
 
+// X-E: a deep link from the browser extension — /?job=1722813 opens that listing.
+async function openDeepLinkJob() {
+  const siteId = new URLSearchParams(location.search).get('job');
+  if (!siteId) return;
+  try {
+    const data = await api(`/api/jobs?job_id=${encodeURIComponent(siteId)}&include_hidden=true`);
+    if (!data.items.length) { toast(`Job ${siteId} is not in your saved jobs`, 'info'); return; }
+    openDetail(data.items[0].id);
+  } catch (e) { toast(`Could not open job ${siteId}: ${e.message}`, 'error'); }
+}
+
 document.addEventListener('DOMContentLoaded', ()=>{
   init();
   connectEvents();
@@ -194,6 +205,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
   loadResumeStatus();
   loadBuiltCvs();
   loadRuns();
+  openDeepLinkJob();
   api('/api/resume/yamlcv-status').then(r=>{
     for (const id of ['btn-build-cv','detail-build-cv-btn']) {
       const b = $(`#${id}`);
@@ -216,3 +228,5 @@ document.addEventListener('DOMContentLoaded', ()=>{
   });
   $('#detail-tailor-btn')?.addEventListener('click', detailTailorClick);
 });
+
+export { openDeepLinkJob };
